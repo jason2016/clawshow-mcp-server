@@ -58,8 +58,14 @@ def _get_github_login() -> str:
     return r.json()["login"]
 
 
+def _log(msg: str) -> None:
+    import sys
+    print(f"[ClawShow] {msg}", flush=True, file=sys.stderr)
+
+
 def _create_repo(repo_name: str, description: str) -> bool:
     """Create repo. Returns True if newly created, False if it already existed."""
+    _log(f"Creating repo: {repo_name}")
     r = httpx.post(
         f"{_GITHUB_API}/user/repos",
         headers=_gh_headers(),
@@ -67,16 +73,17 @@ def _create_repo(repo_name: str, description: str) -> bool:
         timeout=20,
     )
     if r.status_code in (409, 422):
-        # Repo already exists — that's fine, we'll push on top of it
+        _log(f"Repo already exists ({r.status_code}) — reusing it")
         return False
     r.raise_for_status()
+    _log("Repo created OK")
     return True
 
 
-def _get_main_sha(owner: str, repo: str) -> str | None:
-    """Return the current HEAD SHA of main branch, or None if branch doesn't exist."""
+def _get_branch_sha(owner: str, repo: str, branch: str = "main") -> str | None:
+    """Return the current HEAD SHA of a branch, or None if it doesn't exist."""
     r = httpx.get(
-        f"{_GITHUB_API}/repos/{owner}/{repo}/git/refs/heads/main",
+        f"{_GITHUB_API}/repos/{owner}/{repo}/git/refs/heads/{branch}",
         headers=_gh_headers(),
         timeout=15,
     )
@@ -88,6 +95,7 @@ def _get_main_sha(owner: str, repo: str) -> str | None:
 def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> None:
     """Push all files as a single commit using the Git Tree API.
     Works for both brand-new repos (no existing branch) and repos with existing commits."""
+    _log(f"Pushing {len(files)} files to {owner}/{repo}")
     api = _GITHUB_API
     headers = _gh_headers()
 
@@ -104,6 +112,7 @@ def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> No
         tree_entries.append({
             "path": path, "mode": "100644", "type": "blob", "sha": r.json()["sha"]
         })
+    _log(f"Blobs created: {len(tree_entries)}")
 
     # 2. Create tree
     r = httpx.post(
@@ -114,9 +123,11 @@ def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> No
     )
     r.raise_for_status()
     tree_sha = r.json()["sha"]
+    _log(f"Tree SHA: {tree_sha[:8]}")
 
     # 3. Create commit — use existing HEAD as parent if branch already exists
-    existing_sha = _get_main_sha(owner, repo)
+    existing_sha = _get_branch_sha(owner, repo, "main")
+    _log(f"Existing main SHA: {existing_sha[:8] if existing_sha else 'none (new repo)'}")
     commit_payload: dict = {"message": message, "tree": tree_sha}
     commit_payload["parents"] = [existing_sha] if existing_sha else []
 
@@ -128,10 +139,11 @@ def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> No
     )
     r.raise_for_status()
     commit_sha = r.json()["sha"]
+    _log(f"Commit SHA: {commit_sha[:8]}")
 
     # 4. Create or force-update main branch ref
     if existing_sha:
-        # Branch exists — force update (PATCH)
+        _log("Force-updating main ref")
         r = httpx.patch(
             f"{api}/repos/{owner}/{repo}/git/refs/heads/main",
             headers=headers,
@@ -139,7 +151,7 @@ def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> No
             timeout=30,
         )
     else:
-        # New branch — create ref
+        _log("Creating main ref")
         r = httpx.post(
             f"{api}/repos/{owner}/{repo}/git/refs",
             headers=headers,
@@ -147,10 +159,29 @@ def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> No
             timeout=30,
         )
     r.raise_for_status()
+    _log("Push complete")
+
+
+def _wait_for_branch(owner: str, repo: str, branch: str, max_wait: int = 300, interval: int = 10) -> bool:
+    """Poll until a branch exists in the repo (Actions needs to create gh-pages first)."""
+    _log(f"Waiting for branch '{branch}' to appear in {owner}/{repo}")
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        if _get_branch_sha(owner, repo, branch) is not None:
+            _log(f"Branch '{branch}' found")
+            return True
+        time.sleep(interval)
+    _log(f"Timed out waiting for branch '{branch}'")
+    return False
 
 
 def _enable_pages(owner: str, repo: str, branch: str = "gh-pages") -> str:
-    """Enable GitHub Pages from the given branch and return the Pages URL."""
+    """Wait for branch to exist, then enable GitHub Pages from it. Returns Pages URL."""
+    _log(f"Enabling Pages from branch '{branch}'")
+
+    # Wait for the branch to exist (Actions deploys to gh-pages)
+    _wait_for_branch(owner, repo, branch)
+
     r = httpx.post(
         f"{_GITHUB_API}/repos/{owner}/{repo}/pages",
         headers=_gh_headers(),
@@ -158,26 +189,31 @@ def _enable_pages(owner: str, repo: str, branch: str = "gh-pages") -> str:
         timeout=20,
     )
     if r.status_code == 409:
-        # Already enabled — update source branch
+        _log("Pages already enabled — updating source branch")
         httpx.put(
             f"{_GITHUB_API}/repos/{owner}/{repo}/pages",
             headers=_gh_headers(),
             json={"source": {"branch": branch, "path": "/"}},
             timeout=20,
         )
-        get_r = httpx.get(
-            f"{_GITHUB_API}/repos/{owner}/{repo}/pages",
-            headers=_gh_headers(),
-            timeout=15,
-        )
-        get_r.raise_for_status()
-        return get_r.json().get("html_url", f"https://{owner}.github.io/{repo}/")
-    r.raise_for_status()
-    return r.json().get("html_url", f"https://{owner}.github.io/{repo}/")
+    elif r.status_code not in (200, 201):
+        _log(f"Pages enable returned {r.status_code}: {r.text[:200]}")
+        r.raise_for_status()
+
+    get_r = httpx.get(
+        f"{_GITHUB_API}/repos/{owner}/{repo}/pages",
+        headers=_gh_headers(),
+        timeout=15,
+    )
+    get_r.raise_for_status()
+    url = get_r.json().get("html_url", f"https://{owner}.github.io/{repo}/")
+    _log(f"Pages URL: {url}")
+    return url
 
 
 def _wait_for_actions(owner: str, repo: str, max_wait: int = 360, interval: int = 15) -> bool:
     """Poll Actions API until the latest workflow run on main completes successfully."""
+    _log("Waiting for GitHub Actions to complete (up to 6 min)...")
     time.sleep(20)  # Give Actions time to register the run
     deadline = time.time() + max_wait
     while time.time() < deadline:
@@ -191,9 +227,11 @@ def _wait_for_actions(owner: str, repo: str, max_wait: int = 360, interval: int 
             runs = r.json().get("workflow_runs", [])
             if runs:
                 run = runs[0]
+                _log(f"Actions run status: {run['status']} / {run.get('conclusion', '-')}")
                 if run["status"] == "completed":
                     return run["conclusion"] == "success"
         time.sleep(interval)
+    _log("Actions timed out")
     return False
 
 
@@ -784,9 +822,12 @@ def register(mcp, record_call: Callable) -> None:
         slug      = re.sub(r"[^a-z0-9]+", "-", site_name.lower()).strip("-")[:30]
         ts        = int(time.time())
         repo_name = f"clawshow-{slug}-{ts}"
-        owner     = _get_github_login()
 
-        # 1. Create repo
+        _log(f"Starting deployment for: {site_name} → {repo_name}")
+        owner = _get_github_login()
+        _log(f"GitHub owner: {owner}")
+
+        # 1. Create repo (silently reuses if exists)
         _create_repo(repo_name, description=f"Rental website: {site_name} — generated by ClawShow")
 
         # 2. Build all React project files and push as single commit
@@ -799,15 +840,17 @@ def register(mcp, record_call: Callable) -> None:
         # 3. Wait for GitHub Actions to build and deploy to gh-pages branch
         _wait_for_actions(owner, repo_name)
 
-        # 4. Enable Pages from gh-pages branch (created by Actions)
+        # 4. Wait for gh-pages branch, then enable Pages
         pages_url = _enable_pages(owner, repo_name, branch="gh-pages")
         if not pages_url.endswith("/"):
             pages_url += "/"
 
         # 5. Wait for Pages URL to go live
+        _log(f"Polling Pages URL: {pages_url}")
         live = _wait_for_pages_url(pages_url)
 
         repo_url = f"https://github.com/{owner}/{repo_name}"
+        _log(f"Done. Live={live} URL={pages_url}")
 
         if live:
             result = pages_url
