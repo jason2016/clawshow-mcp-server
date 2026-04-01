@@ -5,11 +5,11 @@ Zero Human Intervention: generates HTML AND deploys it to GitHub Pages,
 returning a live accessible URL. No manual steps required.
 
 Flow:
-  1. Build HTML from property data
+  1. Build HTML from property data (Airbnb-style, Unsplash images)
   2. Create a new public GitHub repo (clawshow-rental-{slug}-{ts})
-  3. Push index.html via GitHub Contents API
+  3. Push index.html (and optional CNAME) via GitHub Contents API
   4. Enable GitHub Pages (source: main, root)
-  5. Return https://{owner}.github.io/{repo}/
+  5. Poll until live, then return URL + custom domain info
 
 Env required:
   GITHUB_TOKEN — personal access token with repo + pages scopes
@@ -133,61 +133,56 @@ def _wait_for_pages(url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# HTML builder
+# HTML builder — Airbnb-style
 # ---------------------------------------------------------------------------
 
-def _amenity_badge(label: str) -> str:
+_DEFAULT_EMAIL = "puflorent@gmail.com"
+_DEFAULT_PHONE = "+33 6 42 98 45 35"
+_ACCENT = "#FF385C"
+
+
+def _extract_city(location: str) -> str:
+    """Extract city from 'Street, City' or return 'Paris' as fallback."""
+    if not location:
+        return "Paris"
+    parts = [p.strip() for p in location.split(",") if p.strip()]
+    return parts[-1] if parts else "Paris"
+
+
+def _unsplash(query: str, w: int = 800, h: int = 600) -> str:
+    return f"https://source.unsplash.com/{w}x{h}/?{query}"
+
+
+def _amenity_tag(label: str) -> str:
     return (
-        f'<span class="inline-block bg-stone-100 text-stone-600 '
-        f'text-xs px-2 py-1 rounded-full mr-1 mb-1">{label}</span>'
+        f'<span class="inline-flex items-center bg-gray-100 text-gray-700 '
+        f'text-sm font-medium px-3 py-1 rounded-full">{label}</span>'
     )
 
 
-def _property_card(p: dict, currency: str) -> str:
-    name        = p.get("name", "Property")
-    location    = p.get("location", "")
-    description = p.get("description", "")
-    bedrooms    = p.get("bedrooms", "")
-    max_guests  = p.get("max_guests", "")
-    price       = p.get("price_per_night", "")
-    booking_url = p.get("booking_url", "#")
-    image_url   = p.get("image_url", "")
-    amenities   = p.get("amenities", [])
+def _extra_property_card(p: dict, currency: str) -> str:
+    """Compact card for properties beyond the first one."""
+    name     = p.get("name", "Property")
+    location = p.get("location", "")
+    price    = p.get("price_per_night", "")
+    img_url  = p.get("image_url", "")
+    city     = _extract_city(location).replace(" ", "+")
+    img_src  = img_url if img_url else _unsplash(f"apartment,{city}")
 
-    image_html = (
-        f'<img src="{image_url}" alt="{name}" class="w-full h-48 object-cover rounded-t-xl">'
-        if image_url
-        else '<div class="w-full h-48 bg-stone-200 rounded-t-xl flex items-center justify-center text-stone-400 text-sm">No photo</div>'
+    price_html = (
+        f'<span class="font-bold text-gray-900">{currency}{price}</span>'
+        f'<span class="text-gray-400 text-sm">/night</span>'
+        if price else ""
     )
-
-    amenities_html = "".join(_amenity_badge(a) for a in amenities)
-    price_html = f'{currency}{price}<span class="text-sm font-normal text-stone-400">/night</span>' if price else ""
-
-    beds_guests = ""
-    if bedrooms and max_guests:
-        beds_guests = f'<p class="text-stone-500 text-sm mb-1">{bedrooms} bed · up to {max_guests} guests</p>'
-    elif max_guests:
-        beds_guests = f'<p class="text-stone-500 text-sm mb-1">Up to {max_guests} guests</p>'
-
-    return f"""
-    <div class="bg-white rounded-xl shadow-sm border border-stone-100 overflow-hidden flex flex-col">
-      {image_html}
-      <div class="p-5 flex flex-col flex-1">
-        <h3 class="text-lg font-semibold text-stone-800 mb-1">{name}</h3>
-        <p class="text-stone-500 text-sm mb-2">{location}</p>
-        {beds_guests}
-        <p class="text-stone-600 text-sm mb-3 flex-1">{description}</p>
-        <div class="mb-3">{amenities_html}</div>
-        <div class="flex items-center justify-between mt-auto">
-          <span class="text-xl font-bold text-stone-800">{price_html}</span>
-          <a href="{booking_url}" target="_blank" rel="noopener"
-             class="bg-stone-800 hover:bg-stone-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-            Book
-          </a>
-        </div>
-      </div>
-    </div>
-    """
+    return (
+        f'<div class="border border-gray-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">'
+        f'<img src="{img_src}" alt="{name}" class="w-full h-44 object-cover">'
+        f'<div class="p-4">'
+        f'<h3 class="font-semibold text-gray-900 mb-1">{name}</h3>'
+        f'<p class="text-gray-500 text-sm mb-2">{location}</p>'
+        f'<div class="flex items-center gap-1">{price_html}</div>'
+        f'</div></div>'
+    )
 
 
 def _build_html(
@@ -198,16 +193,127 @@ def _build_html(
     currency: str,
     language: str,
 ) -> str:
-    cards_html = "\n".join(_property_card(p, currency) for p in properties)
-    count = len(properties)
-    subtitle = (
-        f"{count} {'appartement' if language == 'fr' else 'apartment'}{'s' if count != 1 else ''} "
-        f"{'disponibles' if language == 'fr' else 'available'} à Paris"
+    p = properties[0] if properties else {}
+
+    # City for Unsplash
+    city_raw = _extract_city(p.get("location", ""))
+    city = city_raw.replace(" ", "+")
+
+    # Contact (property field > tool arg > hardcoded default)
+    email = p.get("contact_email") or contact_email or _DEFAULT_EMAIL
+    phone = p.get("contact_phone") or contact_phone or _DEFAULT_PHONE
+
+    # Primary property fields
+    prop_name     = p.get("name", site_name)
+    prop_location = p.get("location", "")
+    prop_desc     = p.get("description", "")
+    prop_bedrooms = p.get("bedrooms", "")
+    prop_guests   = p.get("max_guests", "")
+    prop_price    = p.get("price_per_night", "")
+    prop_amenities = p.get("amenities", [])
+
+    # Details line (bedrooms · guests)
+    detail_parts = []
+    if prop_bedrooms:
+        detail_parts.append(f"{prop_bedrooms} bedroom{'s' if str(prop_bedrooms) != '1' else ''}")
+    if prop_guests:
+        detail_parts.append(f"Up to {prop_guests} guests")
+    details_line = " · ".join(detail_parts)
+
+    # Price display
+    price_html_hero = (
+        f'<p class="text-2xl font-semibold mt-2 drop-shadow" style="color:{_ACCENT}">'
+        f'{currency}{prop_price}<span class="text-lg font-normal text-white/80">/night</span></p>'
+    ) if prop_price else ""
+
+    price_html_card = (
+        f'<div class="text-2xl font-bold text-gray-900 mb-1">'
+        f'<span style="color:{_ACCENT}">{currency}{prop_price}</span>'
+        f'<span class="text-base font-normal text-gray-500">/night</span></div>'
+    ) if prop_price else ""
+
+    details_html_card = (
+        f'<p class="text-gray-500 text-sm mb-5">{details_line}</p>'
+    ) if details_line else ""
+
+    details_html_left = (
+        f'<p class="text-gray-500 text-sm mt-1">{details_line}</p>'
+    ) if details_line else ""
+
+    # Amenities
+    amenities_section = ""
+    if prop_amenities:
+        tags = "".join(_amenity_tag(a) for a in prop_amenities)
+        amenities_section = (
+            f'<div>'
+            f'<h3 class="text-lg font-semibold text-gray-900 mb-3">Amenities</h3>'
+            f'<div class="flex flex-wrap gap-2">{tags}</div>'
+            f'</div>'
+        )
+
+    # Description section
+    desc_section = ""
+    if prop_desc:
+        desc_section = (
+            f'<div>'
+            f'<h3 class="text-lg font-semibold text-gray-900 mb-3">About this space</h3>'
+            f'<p class="text-gray-600 leading-relaxed">{prop_desc}</p>'
+            f'</div>'
+        )
+
+    # Location section
+    location_section = ""
+    if prop_location:
+        location_section = (
+            f'<div>'
+            f'<h3 class="text-lg font-semibold text-gray-900 mb-2">Location</h3>'
+            f'<p class="text-gray-600">{prop_location}</p>'
+            f'</div>'
+        )
+
+    # Gallery (8 images, 2-col grid)
+    gallery_items = [
+        ("Living Room",  _unsplash("living-room,interior")),
+        ("Bedroom",      _unsplash("bedroom,interior")),
+        ("Kitchen",      _unsplash("kitchen,interior")),
+        ("Bathroom",     _unsplash("bathroom,interior")),
+        ("Bath",         _unsplash("bathtub,bathroom")),
+        ("Balcony",      _unsplash(f"balcony,{city}")),
+        ("Street View",  _unsplash(f"street,{city}")),
+        ("City View",    _unsplash(f"city,{city}")),
+    ]
+    gallery_html = "\n".join(
+        f'<div class="overflow-hidden rounded-xl">'
+        f'<img src="{url}" alt="{label}" loading="lazy"'
+        f' class="w-full h-48 object-cover hover:scale-105 transition-transform duration-300">'
+        f'<p class="text-xs text-gray-400 mt-1 pl-1">{label}</p>'
+        f'</div>'
+        for label, url in gallery_items
     )
-    phone_html = (
-        f'<a href="tel:{contact_phone}" class="text-stone-400 hover:text-white transition-colors">{contact_phone}</a>'
-        if contact_phone else ""
-    )
+
+    # Extra properties section
+    extra_section = ""
+    if len(properties) > 1:
+        extra_cards_html = "\n".join(
+            _extra_property_card(prop, currency) for prop in properties[1:]
+        )
+        extra_section = (
+            f'<section class="max-w-5xl mx-auto px-4 sm:px-6 py-12 border-t border-gray-100">'
+            f'<h2 class="text-2xl font-bold text-gray-900 mb-6">More Properties</h2>'
+            f'<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">'
+            f'{extra_cards_html}'
+            f'</div></section>'
+        )
+
+    # Phone contact button
+    phone_btn = (
+        f'<a href="tel:{phone}" '
+        f'class="inline-flex items-center gap-2 bg-gray-800 hover:bg-gray-700 '
+        f'text-white font-medium px-6 py-3 rounded-xl transition-colors">'
+        f'&#128222; {phone}</a>'
+    ) if phone else ""
+
+    hero_img = _unsplash(f"apartment,{city}", w=1600, h=900)
 
     return f"""<!DOCTYPE html>
 <html lang="{language}">
@@ -215,34 +321,106 @@ def _build_html(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{site_name}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>body {{ font-family: 'Inter', sans-serif; }}</style>
 </head>
-<body class="bg-stone-50 min-h-screen">
-  <header class="bg-white border-b border-stone-100 sticky top-0 z-10">
-    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
-      <span class="text-lg font-semibold text-stone-800">{site_name}</span>
-      <a href="mailto:{contact_email}" class="text-sm text-stone-500 hover:text-stone-800 transition-colors">{contact_email}</a>
+<body class="bg-white text-gray-800">
+
+  <!-- Navigation -->
+  <nav class="fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-sm border-b border-gray-100">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+      <span class="font-semibold text-gray-900 text-lg">{site_name}</span>
+      <a href="mailto:{email}"
+         class="text-sm text-gray-500 hover:text-gray-900 transition-colors hidden sm:block">{email}</a>
+      <a href="#contact"
+         class="text-sm text-white font-medium px-4 py-2 rounded-lg transition-opacity hover:opacity-90"
+         style="background:{_ACCENT}">Contact</a>
     </div>
-  </header>
-  <section class="max-w-5xl mx-auto px-4 sm:px-6 pt-12 pb-8">
-    <h1 class="text-3xl sm:text-4xl font-bold text-stone-800 mb-3">{site_name}</h1>
-    <p class="text-stone-500 text-lg">{subtitle}</p>
+  </nav>
+
+  <!-- Hero -->
+  <div class="relative mt-16 overflow-hidden" style="height:500px">
+    <img src="{hero_img}" alt="{site_name}" class="w-full h-full object-cover">
+    <div class="absolute inset-0 bg-gradient-to-t from-black/60 via-black/30 to-transparent"></div>
+    <div class="absolute inset-0 flex flex-col items-center justify-center text-white text-center px-4">
+      <h1 class="text-4xl sm:text-5xl font-bold drop-shadow-lg mb-2">{prop_name}</h1>
+      {price_html_hero}
+      <p class="text-white/75 mt-2 text-base">{prop_location}</p>
+    </div>
+  </div>
+
+  <!-- Photo Gallery -->
+  <section class="max-w-5xl mx-auto px-4 sm:px-6 py-10">
+    <h2 class="text-xl font-semibold text-gray-900 mb-4">Photo Gallery</h2>
+    <div class="grid grid-cols-2 gap-3">
+      {gallery_html}
+    </div>
   </section>
-  <main class="max-w-5xl mx-auto px-4 sm:px-6 pb-16">
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-      {cards_html}
-    </div>
-  </main>
-  <footer class="bg-stone-800 text-stone-400 py-10 px-4">
-    <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-      <span class="text-stone-300 font-medium">{site_name}</span>
-      <div class="flex flex-col sm:flex-row gap-3 text-sm items-center">
-        <a href="mailto:{contact_email}" class="hover:text-white transition-colors">{contact_email}</a>
-        {phone_html}
+
+  <!-- Main Content: two-column -->
+  <section class="max-w-5xl mx-auto px-4 sm:px-6 py-8 border-t border-gray-100">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
+
+      <!-- Left: description, amenities, location -->
+      <div class="lg:col-span-2 space-y-8">
+        <div>
+          <h2 class="text-2xl font-bold text-gray-900">{prop_name}</h2>
+          {details_html_left}
+        </div>
+        <hr class="border-gray-100">
+        {desc_section}
+        {amenities_section}
+        {location_section}
       </div>
-      <p class="text-xs text-stone-500">Generated by ClawShow · mcp.clawshow.ai</p>
+
+      <!-- Right: booking card -->
+      <div class="lg:col-span-1">
+        <div class="border border-gray-200 rounded-2xl shadow-lg p-6 sticky top-20">
+          {price_html_card}
+          {details_html_card}
+          <a href="#contact"
+             class="block w-full text-center text-white font-semibold py-3 px-6 rounded-xl
+                    transition-opacity hover:opacity-90 mb-3"
+             style="background:{_ACCENT}">
+            Book Now
+          </a>
+          <p class="text-center text-gray-400 text-xs">No charge until you confirm</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  {extra_section}
+
+  <!-- Contact -->
+  <section id="contact" class="bg-gray-50 py-16 mt-8">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 text-center">
+      <h2 class="text-2xl font-bold text-gray-900 mb-2">Get in Touch</h2>
+      <p class="text-gray-500 mb-8">Ready to book? Reach out and we'll get back to you quickly.</p>
+      <div class="flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="mailto:{email}"
+           class="inline-flex items-center gap-2 text-white font-medium px-6 py-3 rounded-xl
+                  transition-opacity hover:opacity-90"
+           style="background:{_ACCENT}">
+          &#9993; {email}
+        </a>
+        {phone_btn}
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="bg-gray-900 text-gray-400 py-8">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row
+                items-center justify-between gap-3 text-sm">
+      <span class="text-gray-200 font-medium">{site_name}</span>
+      <span>Generated by <a href="https://mcp.clawshow.ai" class="hover:text-gray-200 transition-colors">ClawShow</a></span>
     </div>
   </footer>
+
 </body>
 </html>"""
 
@@ -261,20 +439,21 @@ def register(mcp, record_call: Callable) -> None:
         contact_phone: str = "",
         currency: str = "€",
         language: str = "en",
+        custom_domain: str = "",
     ) -> str:
         """
         Generate and DEPLOY a rental website. Returns a live accessible URL.
 
-        This tool builds a complete property listing website and automatically
-        deploys it to GitHub Pages — no manual steps required. The returned URL
-        is ready to share with guests immediately (live within ~60 seconds).
+        Builds an Airbnb-style property listing site with professional photos
+        (via Unsplash) and automatically deploys it to GitHub Pages.
+        The returned URL is live within ~60 seconds.
 
         Args:
             site_name:     Display name, e.g. "Paris Short Stay"
-            contact_email: Owner email shown in header and footer
+            contact_email: Owner email shown in nav and contact section
             properties:    List of property objects. Each may include:
                              - name (str)
-                             - location (str)
+                             - location (str)  — city extracted for images
                              - description (str)
                              - bedrooms (int, optional)
                              - max_guests (int, optional)
@@ -282,12 +461,16 @@ def register(mcp, record_call: Callable) -> None:
                              - amenities (list[str], optional)
                              - booking_url (str, optional)
                              - image_url (str, optional)
-            contact_phone: Optional phone for footer
+                             - contact_email (str, optional — overrides arg)
+                             - contact_phone (str, optional — overrides arg)
+            contact_phone: Optional phone for contact section
             currency:      Currency symbol, default "€"
             language:      "en" or "fr", default "en"
+            custom_domain: Optional custom domain e.g. "www.parishortstay.com"
+                           A CNAME file will be pushed to the repo automatically.
 
         Returns:
-            Live URL string, e.g. "https://jason2016.github.io/clawshow-paris-short-stay-1234567/"
+            Live URL. If custom_domain is provided, also returns CNAME instructions.
         """
         record_call("generate_rental_website")
 
@@ -321,15 +504,43 @@ def register(mcp, record_call: Callable) -> None:
             commit_msg=f"Add rental website: {site_name}",
         )
 
+        # 5b. Push CNAME file if custom domain provided
+        if custom_domain:
+            cname_value = (
+                custom_domain
+                .replace("https://", "")
+                .replace("http://", "")
+                .rstrip("/")
+            )
+            _push_file(
+                owner=owner,
+                repo=repo_name,
+                filename="CNAME",
+                content=cname_value,
+                commit_msg="Add custom domain CNAME",
+            )
+
         # 6. Enable GitHub Pages
         pages_url = _enable_pages(owner, repo_name)
         if not pages_url.endswith("/"):
             pages_url += "/"
 
-        # 7. Wait for Pages to go live (up to 90s)
+        # 7. Wait for Pages to go live (up to 65s)
         live = _wait_for_pages(pages_url)
 
         if live:
-            return pages_url
+            result = pages_url
         else:
-            return f"Site is deploying, will be live within 60 seconds: {pages_url}"
+            result = f"Site is deploying, will be live within 60 seconds: {pages_url}"
+
+        # 8. Append custom domain instructions if provided
+        if custom_domain:
+            cname_target = f"{owner}.github.io"
+            result += (
+                f"\n\nsite_url: {pages_url}"
+                f"\ncustom_domain: {custom_domain}"
+                f"\ncustom_domain_cname: {cname_target}"
+                f"\ncustom_domain_instructions: Add CNAME record in your DNS: {custom_domain} → {cname_target}"
+            )
+
+        return result
