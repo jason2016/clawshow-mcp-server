@@ -279,24 +279,65 @@ def _build_html(
             f'</div>'
         )
 
-    # Gallery (8 images, 2-col grid)
+    # Gallery — tab carousel
     gallery_items = [
-        ("Living Room",  _PICSUM["living-room"]),
-        ("Bedroom",      _PICSUM["bedroom"]),
-        ("Kitchen",      _PICSUM["kitchen"]),
-        ("Bathroom",     _PICSUM["bathroom"]),
-        ("Bath",         _PICSUM["bath"]),
-        ("Balcony",      _PICSUM["balcony"]),
-        ("Street View",  _PICSUM["street"]),
-        ("City View",    _PICSUM["default"]),
+        ("Living Room", _PICSUM["living-room"]),
+        ("Bedroom",     _PICSUM["bedroom"]),
+        ("Kitchen",     _PICSUM["kitchen"]),
+        ("Bathroom",    _PICSUM["bathroom"]),
+        ("Bath",        _PICSUM["bath"]),
+        ("Balcony",     _PICSUM["balcony"]),
+        ("Street View", _PICSUM["street"]),
     ]
-    gallery_html = "\n".join(
-        f'<div class="overflow-hidden rounded-xl">'
-        f'<img src="{url}" alt="{label}" loading="lazy"'
-        f' class="w-full h-48 object-cover hover:scale-105 transition-transform duration-300">'
-        f'<p class="text-xs text-gray-400 mt-1 pl-1">{label}</p>'
+
+    tab_buttons = "\n".join(
+        f'<button onclick="showTab({i})" id="tab-{i}" '
+        f'class="carousel-tab px-4 py-2 text-sm font-medium rounded-full whitespace-nowrap '
+        f'transition-colors border" '
+        f'style="{"background:{_ACCENT};color:#fff;border-color:{_ACCENT}" if i == 0 else "background:#fff;color:#6b7280;border-color:#e5e7eb"}">'
+        f'{label}</button>'
+        for i, (label, _) in enumerate(gallery_items)
+    )
+
+    tab_panels = "\n".join(
+        f'<div id="panel-{i}" class="carousel-panel" style="display:{"block" if i == 0 else "none"}">'
+        f'<img src="{url}" alt="{label}" loading="lazy" '
+        f'class="w-full object-cover rounded-xl" style="height:400px;object-fit:cover">'
+        f'<p class="text-center text-sm text-gray-500 mt-3 font-medium">{label}</p>'
         f'</div>'
-        for label, url in gallery_items
+        for i, (label, url) in enumerate(gallery_items)
+    )
+
+    gallery_js = f"""
+    <script>
+      var _accent = '{_ACCENT}';
+      var _total = {len(gallery_items)};
+      function showTab(idx) {{
+        for (var i = 0; i < _total; i++) {{
+          var panel = document.getElementById('panel-' + i);
+          var tab   = document.getElementById('tab-'   + i);
+          if (i === idx) {{
+            panel.style.display = 'block';
+            tab.style.background    = _accent;
+            tab.style.color         = '#fff';
+            tab.style.borderColor   = _accent;
+          }} else {{
+            panel.style.display = 'none';
+            tab.style.background    = '#fff';
+            tab.style.color         = '#6b7280';
+            tab.style.borderColor   = '#e5e7eb';
+          }}
+        }}
+      }}
+    </script>
+    """
+
+    gallery_html = (
+        f'<div class="flex gap-2 overflow-x-auto pb-2 mb-4" '
+        f'style="scrollbar-width:none;-ms-overflow-style:none">'
+        f'{tab_buttons}</div>'
+        f'{tab_panels}'
+        f'{gallery_js}'
     )
 
     # Extra properties section
@@ -359,12 +400,10 @@ def _build_html(
     </div>
   </div>
 
-  <!-- Photo Gallery -->
+  <!-- Photo Gallery Carousel -->
   <section class="max-w-5xl mx-auto px-4 sm:px-6 py-10">
     <h2 class="text-xl font-semibold text-gray-900 mb-4">Photo Gallery</h2>
-    <div class="grid grid-cols-2 gap-3">
-      {gallery_html}
-    </div>
+    {gallery_html}
   </section>
 
   <!-- Main Content: two-column -->
