@@ -58,20 +58,36 @@ def _get_github_login() -> str:
     return r.json()["login"]
 
 
-def _create_repo(repo_name: str, description: str) -> None:
+def _create_repo(repo_name: str, description: str) -> bool:
+    """Create repo. Returns True if newly created, False if it already existed."""
     r = httpx.post(
         f"{_GITHUB_API}/user/repos",
         headers=_gh_headers(),
         json={"name": repo_name, "description": description, "private": False, "auto_init": False},
         timeout=20,
     )
-    if r.status_code == 422:
-        raise RuntimeError(f"Repo '{repo_name}' already exists: {r.json().get('message')}")
+    if r.status_code in (409, 422):
+        # Repo already exists — that's fine, we'll push on top of it
+        return False
     r.raise_for_status()
+    return True
+
+
+def _get_main_sha(owner: str, repo: str) -> str | None:
+    """Return the current HEAD SHA of main branch, or None if branch doesn't exist."""
+    r = httpx.get(
+        f"{_GITHUB_API}/repos/{owner}/{repo}/git/refs/heads/main",
+        headers=_gh_headers(),
+        timeout=15,
+    )
+    if r.status_code == 200:
+        return r.json()["object"]["sha"]
+    return None
 
 
 def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> None:
-    """Push all files as a single commit using the Git Tree API (initial commit)."""
+    """Push all files as a single commit using the Git Tree API.
+    Works for both brand-new repos (no existing branch) and repos with existing commits."""
     api = _GITHUB_API
     headers = _gh_headers()
 
@@ -99,23 +115,37 @@ def _push_tree(owner: str, repo: str, files: dict[str, str], message: str) -> No
     r.raise_for_status()
     tree_sha = r.json()["sha"]
 
-    # 3. Create commit (no parents — this is the initial commit)
+    # 3. Create commit — use existing HEAD as parent if branch already exists
+    existing_sha = _get_main_sha(owner, repo)
+    commit_payload: dict = {"message": message, "tree": tree_sha}
+    commit_payload["parents"] = [existing_sha] if existing_sha else []
+
     r = httpx.post(
         f"{api}/repos/{owner}/{repo}/git/commits",
         headers=headers,
-        json={"message": message, "tree": tree_sha, "parents": []},
+        json=commit_payload,
         timeout=30,
     )
     r.raise_for_status()
     commit_sha = r.json()["sha"]
 
-    # 4. Create main branch ref
-    r = httpx.post(
-        f"{api}/repos/{owner}/{repo}/git/refs",
-        headers=headers,
-        json={"ref": "refs/heads/main", "sha": commit_sha},
-        timeout=30,
-    )
+    # 4. Create or force-update main branch ref
+    if existing_sha:
+        # Branch exists — force update (PATCH)
+        r = httpx.patch(
+            f"{api}/repos/{owner}/{repo}/git/refs/heads/main",
+            headers=headers,
+            json={"sha": commit_sha, "force": True},
+            timeout=30,
+        )
+    else:
+        # New branch — create ref
+        r = httpx.post(
+            f"{api}/repos/{owner}/{repo}/git/refs",
+            headers=headers,
+            json={"ref": "refs/heads/main", "sha": commit_sha},
+            timeout=30,
+        )
     r.raise_for_status()
 
 
