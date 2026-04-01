@@ -5,7 +5,7 @@ Zero Human Intervention: generates HTML AND deploys it to GitHub Pages,
 returning a live accessible URL. No manual steps required.
 
 Flow:
-  1. Build HTML from property data (Airbnb-style, Unsplash images)
+  1. Build HTML from property data (Airbnb-style, Picsum Photos images)
   2. Create a new public GitHub repo (clawshow-rental-{slug}-{ts})
   3. Push index.html (and optional CNAME) via GitHub Contents API
   4. Enable GitHub Pages (source: main, root)
@@ -149,8 +149,17 @@ def _extract_city(location: str) -> str:
     return parts[-1] if parts else "Paris"
 
 
-def _unsplash(query: str, w: int = 800, h: int = 600) -> str:
-    return f"https://source.unsplash.com/{w}x{h}/?{query}"
+_PICSUM = {
+    "hero":        "https://picsum.photos/1600/900?random=1",
+    "living-room": "https://picsum.photos/800/600?random=2",
+    "bedroom":     "https://picsum.photos/800/600?random=3",
+    "kitchen":     "https://picsum.photos/800/600?random=4",
+    "bathroom":    "https://picsum.photos/800/600?random=5",
+    "bath":        "https://picsum.photos/800/600?random=6",
+    "balcony":     "https://picsum.photos/800/600?random=7",
+    "street":      "https://picsum.photos/800/600?random=8",
+    "default":     "https://picsum.photos/800/600?random=9",
+}
 
 
 def _amenity_tag(label: str) -> str:
@@ -167,7 +176,7 @@ def _extra_property_card(p: dict, currency: str) -> str:
     price    = p.get("price_per_night", "")
     img_url  = p.get("image_url", "")
     city     = _extract_city(location).replace(" ", "+")
-    img_src  = img_url if img_url else _unsplash(f"apartment,{city}")
+    img_src  = img_url if img_url else _PICSUM["default"]
 
     price_html = (
         f'<span class="font-bold text-gray-900">{currency}{price}</span>'
@@ -195,7 +204,6 @@ def _build_html(
 ) -> str:
     p = properties[0] if properties else {}
 
-    # City for Unsplash
     city_raw = _extract_city(p.get("location", ""))
     city = city_raw.replace(" ", "+")
 
@@ -273,14 +281,14 @@ def _build_html(
 
     # Gallery (8 images, 2-col grid)
     gallery_items = [
-        ("Living Room",  _unsplash("living-room,interior")),
-        ("Bedroom",      _unsplash("bedroom,interior")),
-        ("Kitchen",      _unsplash("kitchen,interior")),
-        ("Bathroom",     _unsplash("bathroom,interior")),
-        ("Bath",         _unsplash("bathtub,bathroom")),
-        ("Balcony",      _unsplash(f"balcony,{city}")),
-        ("Street View",  _unsplash(f"street,{city}")),
-        ("City View",    _unsplash(f"city,{city}")),
+        ("Living Room",  _PICSUM["living-room"]),
+        ("Bedroom",      _PICSUM["bedroom"]),
+        ("Kitchen",      _PICSUM["kitchen"]),
+        ("Bathroom",     _PICSUM["bathroom"]),
+        ("Bath",         _PICSUM["bath"]),
+        ("Balcony",      _PICSUM["balcony"]),
+        ("Street View",  _PICSUM["street"]),
+        ("City View",    _PICSUM["default"]),
     ]
     gallery_html = "\n".join(
         f'<div class="overflow-hidden rounded-xl">'
@@ -313,7 +321,7 @@ def _build_html(
         f'&#128222; {phone}</a>'
     ) if phone else ""
 
-    hero_img = _unsplash(f"apartment,{city}", w=1600, h=900)
+    hero_img = _PICSUM["hero"]
 
     return f"""<!DOCTYPE html>
 <html lang="{language}">
