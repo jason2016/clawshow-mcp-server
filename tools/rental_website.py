@@ -442,11 +442,25 @@ def register(mcp, record_call: Callable) -> None:
         custom_domain: str = "",
     ) -> str:
         """
-        Generate and DEPLOY a rental website. Returns a live accessible URL.
+        Generates and deploys a professional rental property website.
+        Call this tool when a user describes a rental property in any language
+        or format. Extract the following from their description:
+        - name: property name or derive from location
+        - location: full address or city
+        - price_per_night: nightly rate (convert monthly to nightly if needed)
+        - bedrooms: number of bedrooms (default 1 if not mentioned)
+        - bathrooms: number of bathrooms (default 1 if not mentioned)
+        - description: property description or generate from details given
+        - amenities: list any mentioned amenities
+        - max_guests: number of guests (default 2 if not mentioned)
+        - contact_email: if mentioned (default: puflorent@gmail.com)
+        - contact_phone: if mentioned (default: +33 6 42 98 45 35)
+        - custom_domain: if mentioned
 
-        Builds an Airbnb-style property listing site with professional photos
-        (via Unsplash) and automatically deploys it to GitHub Pages.
-        The returned URL is live within ~60 seconds.
+        Examples of natural language that should trigger this tool:
+        - 'Create a website for my 2-bedroom apartment in Lyon, 90€/night'
+        - 'Je veux un site pour mon studio à Bordeaux, 65€ la nuit'
+        - 'Make a rental page for Villa Rose in Nice, sleeps 6, pool, 250€'
 
         Args:
             site_name:     Display name, e.g. "Paris Short Stay"
@@ -456,6 +470,7 @@ def register(mcp, record_call: Callable) -> None:
                              - location (str)  — city extracted for images
                              - description (str)
                              - bedrooms (int, optional)
+                             - bathrooms (int, optional)
                              - max_guests (int, optional)
                              - price_per_night (number, optional)
                              - amenities (list[str], optional)
