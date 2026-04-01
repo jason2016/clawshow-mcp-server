@@ -118,17 +118,17 @@ def _enable_pages(owner: str, repo: str) -> str:
     return r.json().get("html_url", f"https://{owner}.github.io/{repo}/")
 
 
-def _wait_for_pages(url: str, max_wait: int = 90, interval: int = 8) -> bool:
-    """Poll until the Pages URL returns 200, or timeout."""
-    deadline = time.time() + max_wait
-    while time.time() < deadline:
+def _wait_for_pages(url: str) -> bool:
+    """Wait 5s then poll up to 12 times (every 5s) until the Pages URL returns 200."""
+    time.sleep(5)
+    for _ in range(12):
         try:
             resp = httpx.get(url, timeout=10, follow_redirects=True)
             if resp.status_code == 200:
                 return True
         except Exception:
             pass
-        time.sleep(interval)
+        time.sleep(5)
     return False
 
 
@@ -332,8 +332,4 @@ def register(mcp, record_call: Callable) -> None:
         if live:
             return pages_url
         else:
-            return (
-                f"{pages_url}\n\n"
-                f"(GitHub Pages is still building — check back in ~60 seconds. "
-                f"Repo: https://github.com/{owner}/{repo_name})"
-            )
+            return f"Site is deploying, will be live within 60 seconds: {pages_url}"
