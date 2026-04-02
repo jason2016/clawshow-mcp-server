@@ -8,8 +8,9 @@ Transport:
   - stdio (local Claude Desktop testing)
 
 Endpoints (SSE mode):
-  GET /sse      — MCP SSE stream
-  GET /stats    — Tool call counts (JSON, CORS-enabled)
+  GET /sse              — MCP SSE stream
+  GET /stats            — Tool call counts (JSON, CORS-enabled)
+  POST /webhook/stripe  — Stripe payment webhook
 
 Usage:
   Local SSE:   python server.py
@@ -87,9 +88,13 @@ def _record_call(tool_name: str, meta: dict | None = None) -> None:
 
 from tools.rental_website import register as _register_rental_website
 from tools.finance_extract import register as _register_finance_extract
+from tools.stripe_payment import register as _register_stripe_payment
+from tools.notification import register as _register_notification
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
+_register_stripe_payment(mcp, _record_call)
+_register_notification(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint
@@ -124,13 +129,58 @@ async def stats(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Combined ASGI app (MCP SSE + /stats)
+# Stripe webhook endpoint
+# ---------------------------------------------------------------------------
+
+PAYMENTS_DIR = Path(__file__).parent / "data" / "payments"
+
+
+async def stripe_webhook(request: Request) -> JSONResponse:
+    """
+    POST /webhook/stripe
+    Handles Stripe checkout.session.completed events.
+    Writes payment record to data/payments/{session_id}.json.
+    """
+    import stripe
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+    if not webhook_secret:
+        return JSONResponse({"error": "STRIPE_WEBHOOK_SECRET not configured"}, status_code=500)
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except (ValueError, stripe.SignatureVerificationError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        PAYMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        record = {
+            "session_id":     session.get("id"),
+            "amount":         session.get("amount_total"),
+            "currency":       session.get("currency"),
+            "customer_email": session.get("customer_details", {}).get("email"),
+            "metadata":       session.get("metadata", {}),
+            "completed_at":   datetime.now(timezone.utc).isoformat(),
+        }
+        out = PAYMENTS_DIR / f"{session.get('id', 'unknown')}.json"
+        out.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return JSONResponse({"received": True})
+
+
+# ---------------------------------------------------------------------------
+# Combined ASGI app (MCP SSE + /stats + /webhook/stripe)
 # ---------------------------------------------------------------------------
 
 def _build_app() -> Starlette:
     return Starlette(
         routes=[
             Route("/stats", stats, methods=["GET"]),
+            Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
@@ -143,7 +193,7 @@ def _build_app() -> Starlette:
                     "http://localhost:5173",   # clawshow-site dev
                     "http://localhost:3000",
                 ],
-                allow_methods=["GET", "OPTIONS"],
+                allow_methods=["GET", "POST", "OPTIONS"],
                 allow_headers=["*"],
             )
         ],

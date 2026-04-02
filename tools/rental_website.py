@@ -260,6 +260,7 @@ def _build_types_ts(
     properties: list[dict],
     currency: str,
     language: str,
+    payment_url: str = "",
 ) -> str:
     def _to_camel(props: dict) -> dict:
         key_map = {
@@ -278,6 +279,7 @@ def _build_types_ts(
         "contactPhone": contact_phone or _DEFAULT_PHONE,
         "currency":     currency,
         "language":     language,
+        "paymentUrl":   payment_url,
         "properties":   [_to_camel(p) for p in properties],
     }
     json_str = json.dumps(data, indent=2, ensure_ascii=False)
@@ -432,7 +434,7 @@ function GallerySection() {
 }
 
 function BookingCard() {
-  const { currency, properties } = SITE_DATA
+  const { currency, properties, paymentUrl } = SITE_DATA
   const prop = properties[0] as any
   return (
     <div className="border border-gray-200 rounded-2xl shadow-lg p-6 sticky top-20">
@@ -450,14 +452,30 @@ function BookingCard() {
           </span>
         )}
       </div>
-      <a
-        href="#contact"
-        className="block w-full text-center text-white font-semibold py-3 px-6 rounded-xl transition-opacity hover:opacity-90 mb-3"
-        style={{ background: ACCENT }}
-      >
-        Book Now
-      </a>
-      <p className="text-center text-gray-400 text-xs">No charge until you confirm</p>
+      {paymentUrl ? (
+        <a
+          href={paymentUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full text-center text-white font-semibold py-3 px-6 rounded-xl transition-colors mb-3"
+          style={{ background: '#16a34a' }}
+          onMouseOver={(e) => (e.currentTarget.style.background = '#15803d')}
+          onMouseOut={(e) => (e.currentTarget.style.background = '#16a34a')}
+        >
+          Pay Now {prop.pricePerNight ? `— ${currency}${prop.pricePerNight}` : ''}
+        </a>
+      ) : (
+        <a
+          href="#contact"
+          className="block w-full text-center text-white font-semibold py-3 px-6 rounded-xl transition-opacity hover:opacity-90 mb-3"
+          style={{ background: ACCENT }}
+        >
+          Book Now
+        </a>
+      )}
+      <p className="text-center text-gray-400 text-xs">
+        {paymentUrl ? 'Secure payment via Stripe' : 'No charge until you confirm'}
+      </p>
     </div>
   )
 }
@@ -745,12 +763,13 @@ def _build_all_files(
     language: str,
     repo_name: str,
     custom_domain: str,
+    payment_url: str = "",
 ) -> dict[str, str]:
     files = {
         "index.html":                    _build_index_html(site_name),
         "src/main.tsx":                  _build_main_tsx(),
         "src/App.tsx":                   _build_app_tsx(),
-        "src/types.ts":                  _build_types_ts(site_name, contact_email, contact_phone, properties, currency, language),
+        "src/types.ts":                  _build_types_ts(site_name, contact_email, contact_phone, properties, currency, language, payment_url),
         "src/index.css":                 _build_index_css(),
         "package.json":                  _build_package_json(),
         "vite.config.ts":                _build_vite_config(repo_name),
@@ -780,6 +799,7 @@ def register(mcp, record_call: Callable) -> None:
         currency: str = "€",
         language: str = "en",
         custom_domain: str = "",
+        payment_url: str = "",
     ) -> str:
         """
         Generates and deploys a professional rental property website.
@@ -812,6 +832,8 @@ def register(mcp, record_call: Callable) -> None:
             currency:      Currency symbol, default "€"
             language:      "en" or "fr", default "en"
             custom_domain: Optional custom domain (CNAME file will be added)
+            payment_url:   Optional Stripe Checkout URL — changes "Book Now"
+                           to a green "Pay Now" button linking to Stripe
 
         Returns:
             Live URL once deployed (~3 minutes), or URL + status if still building.
@@ -836,6 +858,7 @@ def register(mcp, record_call: Callable) -> None:
         files = _build_all_files(
             site_name, contact_email, contact_phone,
             properties, currency, language, repo_name, custom_domain,
+            payment_url,
         )
         _push_all(owner, repo_name, files, f"Add rental website: {site_name}")
 
