@@ -170,7 +170,7 @@ def register(mcp, record_call: Callable) -> None:
         for recipient in recipients:
             try:
                 params: dict = {
-                    "from_": from_email,
+                    "from": from_email,
                     "to": [recipient],
                     "subject": subject,
                     "html": html_body,
