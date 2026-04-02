@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.jason2016/clawshow-mcp-server",
+  "description": "Generate complete rental websites instantly. Input property data, get a live URL deployed to GitHub Pages. Zero human intervention. Built for the French rental market.",
+  "repository": {
+    "url": "https://github.com/jason2016/clawshow-mcp-server",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "remotes": [
+    {
+      "transportType": "sse",
+      "url": "https://mcp.clawshow.ai/sse"
+    }
+  ]
+}
