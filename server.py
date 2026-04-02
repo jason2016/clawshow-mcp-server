@@ -92,6 +92,7 @@ from tools.stripe_payment import register as _register_stripe_payment
 from tools.notification import register as _register_notification
 from tools.orders import register as _register_orders
 from tools.business_page import register as _register_business_page
+from tools.inventory import register as _register_inventory
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
@@ -99,6 +100,7 @@ _register_stripe_payment(mcp, _record_call)
 _register_notification(mcp, _record_call)
 _register_orders(mcp, _record_call)
 _register_business_page(mcp, _record_call)
+_register_inventory(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint

@@ -4,5 +4,6 @@ __pycache__/
 data/usage_log.json
 data/payments/
 data/orders/
+data/inventory/
 .venv/
 venv/
