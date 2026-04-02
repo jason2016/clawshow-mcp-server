@@ -90,11 +90,13 @@ from tools.rental_website import register as _register_rental_website
 from tools.finance_extract import register as _register_finance_extract
 from tools.stripe_payment import register as _register_stripe_payment
 from tools.notification import register as _register_notification
+from tools.orders import register as _register_orders
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
 _register_stripe_payment(mcp, _record_call)
 _register_notification(mcp, _record_call)
+_register_orders(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint
@@ -168,6 +170,12 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         }
         out = PAYMENTS_DIR / f"{session.get('id', 'unknown')}.json"
         out.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        # Auto-mark linked order as paid
+        order_id = session.get("metadata", {}).get("order_id")
+        if order_id:
+            from tools.orders import webhook_mark_paid
+            webhook_mark_paid(order_id)
 
     return JSONResponse({"received": True})
 
