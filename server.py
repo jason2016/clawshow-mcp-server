@@ -93,6 +93,7 @@ from tools.notification import register as _register_notification
 from tools.orders import register as _register_orders
 from tools.business_page import register as _register_business_page
 from tools.inventory import register as _register_inventory
+from tools.report import register as _register_report
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
@@ -101,6 +102,7 @@ _register_notification(mcp, _record_call)
 _register_orders(mcp, _record_call)
 _register_business_page(mcp, _record_call)
 _register_inventory(mcp, _record_call)
+_register_report(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint
@@ -185,7 +187,25 @@ async def stripe_webhook(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Combined ASGI app (MCP SSE + /stats + /webhook/stripe)
+# PDF report serving
+# ---------------------------------------------------------------------------
+
+REPORTS_DIR = Path(__file__).parent / "data" / "reports"
+
+
+async def serve_report(request: Request):
+    """GET /reports/{namespace}/{filename} — serve generated PDF files."""
+    from starlette.responses import FileResponse
+    namespace = request.path_params["namespace"]
+    filename = request.path_params["filename"]
+    filepath = REPORTS_DIR / namespace / filename
+    if not filepath.exists() or ".." in filename:
+        return JSONResponse({"error": "Report not found"}, status_code=404)
+    return FileResponse(str(filepath), media_type="application/pdf")
+
+
+# ---------------------------------------------------------------------------
+# Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports)
 # ---------------------------------------------------------------------------
 
 def _build_app() -> Starlette:
@@ -193,6 +213,7 @@ def _build_app() -> Starlette:
         routes=[
             Route("/stats", stats, methods=["GET"]),
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
+            Route("/reports/{namespace}/{filename}", serve_report, methods=["GET"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
