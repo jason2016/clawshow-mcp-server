@@ -164,7 +164,7 @@ def register(mcp, record_call: Callable) -> None:
             paragraphs = "".join(f"<p style='color:#374151;font-size:14px;line-height:1.6'>{p}</p>" for p in body.split("\n") if p.strip())
             html_body = _render_template("custom", {"body": paragraphs})
 
-        from_email = f"{from_name} <notifications@clawshow.ai>"
+        from_email = "ClawShow <onboarding@resend.dev>"
 
         results = []
         for recipient in recipients:
