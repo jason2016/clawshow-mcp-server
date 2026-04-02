@@ -7,7 +7,7 @@ GitHub Actions to GitHub Pages, returning a live accessible URL.
 Flow:
   1. Build React project files from property data
   2. Create a new public GitHub repo (clawshow-rental-{slug}-{ts})
-  3. Push all files in a single commit via Git Tree API
+  3. Push all files in a single commit via Git Tree API (blobs → tree → commit → update ref)
   4. GitHub Actions triggers automatically: npm install → build → deploy to gh-pages
   5. Poll Actions until workflow completes (~2-3 min)
   6. Enable GitHub Pages from gh-pages branch
@@ -92,45 +92,74 @@ def _get_branch_sha(owner: str, repo: str, branch: str = "main") -> str | None:
     return None
 
 
-def _push_files(owner: str, repo: str, files: dict[str, str]) -> None:
-    """Push files one by one via Contents API. Retries on 404/409 (repo still initialising)."""
-    import base64
-    _log(f"Pushing {len(files)} files to {owner}/{repo} via Contents API")
+def _git_post(url: str, headers: dict, payload: dict, label: str) -> dict:
+    """POST to Git API with retry on 404/409 (repo still initialising)."""
+    for attempt in range(4):
+        r = httpx.post(url, headers=headers, json=payload, timeout=30)
+        if r.status_code in (404, 409) and attempt < 3:
+            wait = (attempt + 1) * 3
+            _log(f"  {label} got {r.status_code} (attempt {attempt + 1}/3) — retry in {wait}s")
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise RuntimeError(f"{label} failed after retries")
+
+
+def _push_all(owner: str, repo: str, files: dict[str, str], message: str) -> None:
+    """Push ALL files as a single commit via Git Tree API.
+    Requires auto_init=True repo so main branch already exists."""
+    _log(f"Pushing {len(files)} files as single commit to {owner}/{repo}")
+    api = _GITHUB_API
     headers = _gh_headers()
-    total = len(files)
 
+    # 1. Get current main HEAD SHA (auto_init guarantees it exists)
+    parent_sha = _get_branch_sha(owner, repo, "main")
+    if not parent_sha:
+        raise RuntimeError("main branch not found — repo may not have initialised yet")
+    _log(f"  main HEAD: {parent_sha[:8]}")
+
+    # 2. Create blobs for every file
+    tree_items = []
     for i, (path, content) in enumerate(files.items(), 1):
-        encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        data = _git_post(
+            f"{api}/repos/{owner}/{repo}/git/blobs",
+            headers,
+            {"content": content, "encoding": "utf-8"},
+            f"blob:{path}",
+        )
+        tree_items.append({"path": path, "mode": "100644", "type": "blob", "sha": data["sha"]})
+        _log(f"  blob [{i}/{len(files)}] {path}")
 
-        for attempt in range(4):
-            payload: dict = {"message": f"add {path}", "content": encoded}
+    # 3. Create tree (base_tree = current main so auto_init's README stays unless overwritten)
+    data = _git_post(
+        f"{api}/repos/{owner}/{repo}/git/trees",
+        headers,
+        {"base_tree": parent_sha, "tree": tree_items},
+        "tree",
+    )
+    tree_sha = data["sha"]
+    _log(f"  tree: {tree_sha[:8]}")
 
-            # If file already exists, we need its SHA to update
-            check = httpx.get(
-                f"{_GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
-                headers=headers,
-                timeout=15,
-            )
-            if check.status_code == 200:
-                payload["sha"] = check.json().get("sha")
+    # 4. Create commit with main as parent
+    data = _git_post(
+        f"{api}/repos/{owner}/{repo}/git/commits",
+        headers,
+        {"message": message, "tree": tree_sha, "parents": [parent_sha]},
+        "commit",
+    )
+    commit_sha = data["sha"]
+    _log(f"  commit: {commit_sha[:8]}")
 
-            r = httpx.put(
-                f"{_GITHUB_API}/repos/{owner}/{repo}/contents/{path}",
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
-            if r.status_code in (404, 409) and attempt < 3:
-                wait = (attempt + 1) * 3
-                _log(f"  {path} got {r.status_code} (attempt {attempt + 1}/3) — retrying in {wait}s")
-                time.sleep(wait)
-                continue
-            r.raise_for_status()
-            break
-
-        _log(f"  [{i}/{total}] {path}")
-
-    _log("Push complete")
+    # 5. Fast-forward main ref to new commit
+    r = httpx.patch(
+        f"{api}/repos/{owner}/{repo}/git/refs/heads/main",
+        headers=headers,
+        json={"sha": commit_sha, "force": True},
+        timeout=30,
+    )
+    r.raise_for_status()
+    _log("  push complete — single commit on main")
 
 
 def _wait_for_branch(owner: str, repo: str, branch: str, max_wait: int = 300, interval: int = 10) -> bool:
@@ -808,7 +837,7 @@ def register(mcp, record_call: Callable) -> None:
             site_name, contact_email, contact_phone,
             properties, currency, language, repo_name, custom_domain,
         )
-        _push_files(owner, repo_name, files)
+        _push_all(owner, repo_name, files, f"Add rental website: {site_name}")
 
         # 3. Wait for GitHub Actions to build and deploy to gh-pages branch
         _wait_for_actions(owner, repo_name)
