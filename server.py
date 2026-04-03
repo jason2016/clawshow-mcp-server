@@ -164,15 +164,12 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=400)
 
     if event["type"] == "checkout.session.completed":
-        # Convert StripeObject to plain dict so .get() works reliably
-        session = dict(event["data"]["object"])
+        # StripeObject doesn't support dict() — use to_dict_recursive()
+        raw = event["data"]["object"]
+        session = raw.to_dict_recursive() if hasattr(raw, "to_dict_recursive") else raw.to_dict() if hasattr(raw, "to_dict") else dict(vars(raw).get("_data", {}))
         PAYMENTS_DIR.mkdir(parents=True, exist_ok=True)
         customer_details = session.get("customer_details") or {}
-        if not isinstance(customer_details, dict):
-            customer_details = dict(customer_details)
         metadata = session.get("metadata") or {}
-        if not isinstance(metadata, dict):
-            metadata = dict(metadata)
         record = {
             "session_id":     session.get("id"),
             "amount":         session.get("amount_total"),
