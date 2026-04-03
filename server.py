@@ -164,21 +164,28 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=400)
 
     if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
+        # Convert StripeObject to plain dict so .get() works reliably
+        session = dict(event["data"]["object"])
         PAYMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        customer_details = session.get("customer_details") or {}
+        if not isinstance(customer_details, dict):
+            customer_details = dict(customer_details)
+        metadata = session.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = dict(metadata)
         record = {
             "session_id":     session.get("id"),
             "amount":         session.get("amount_total"),
             "currency":       session.get("currency"),
-            "customer_email": session.get("customer_details", {}).get("email"),
-            "metadata":       session.get("metadata", {}),
+            "customer_email": customer_details.get("email"),
+            "metadata":       metadata,
             "completed_at":   datetime.now(timezone.utc).isoformat(),
         }
         out = PAYMENTS_DIR / f"{session.get('id', 'unknown')}.json"
         out.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # Auto-mark linked order as paid
-        order_id = session.get("metadata", {}).get("order_id")
+        order_id = metadata.get("order_id")
         if order_id:
             from tools.orders import webhook_mark_paid
             webhook_mark_paid(order_id)
