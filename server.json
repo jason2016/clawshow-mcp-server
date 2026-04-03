@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.jason2016/clawshow-mcp-server",
-  "description": "Instant Backend for SMBs — 8 AI-callable tools: generate business pages (5 types), Stripe payments, email notifications, order management, inventory tracking, PDF reports, invoice extraction. Deploy rental websites, collect payments, send confirmations — all via MCP. Zero human intervention.",
+  "description": "Instant Backend for SMBs: business pages, Stripe payments, notifications, orders, inventory, reports.",
   "repository": {
     "url": "https://github.com/jason2016/clawshow-mcp-server",
     "source": "github"
