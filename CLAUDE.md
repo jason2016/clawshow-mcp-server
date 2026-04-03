@@ -69,6 +69,25 @@ Test:      curl https://mcp.clawshow.ai/stats
 | CTO | Claude.ai (Opus) | Strategy, architecture, planning |
 | Engineer | Claude Code (Sonnet) | Code, deploy, debug, SSH to stand9 |
 
+## Workflow (Sprint Process)
+
+### Feature Development
+1. **Design:** CEO+CTO discuss in Claude.ai → output: decision in `docs/DECISIONS.md`
+2. **Spec:** CTO writes Claude Code prompt → output: clear requirements
+3. **Build:** Claude Code implements → output: code + tests
+4. **Deploy:** Claude Code SSH to stand9 → output: service running
+5. **Verify:** CEO tests in Claude.ai → output: confirmed working
+6. **Tag:** Claude Code creates git tag → output: stable version
+
+### Bug Fix
+1. CEO reports issue with screenshot
+2. CTO writes debug prompt for Claude Code
+3. Claude Code SSH to stand9, diagnose, fix, restart
+4. CEO re-tests
+
+### Key Rule
+Every decision from Claude.ai chat MUST be written to `docs/DECISIONS.md` before implementation. If it's not in the repo, it doesn't exist for the agent.
+
 ## Rules
 
 - Every Tool must pass admission: AI can't do it alone + has deliverable + zero human intervention
