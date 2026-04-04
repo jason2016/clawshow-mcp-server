@@ -408,6 +408,7 @@ def register(mcp, record_call: Callable) -> None:
         limit: int = 20,
         order_id: str = "",
         booking_id: int = 0,
+        booking_code: str = "",
         booking_date: str = "",
         booking_time: str = "",
         booking_type: str = "emporter",
@@ -468,6 +469,7 @@ def register(mcp, record_call: Callable) -> None:
             reason:           Refund reason
 
             # booking params:
+            booking_code:     3-digit code for checkin (e.g. "011")
             booking_id:       Booking ID (for cancel_booking)
             booking_date:     Date filter for query_bookings / booking_summary (YYYY-MM-DD)
             booking_time:     Time for booking
@@ -514,10 +516,12 @@ def register(mcp, record_call: Callable) -> None:
             else:
                 result = db.cancel_booking(namespace, booking_id)
         elif action == "checkin":
-            code = params.get("order_id", "") or str(booking_id) if booking_id else ""
+            code = booking_code or order_id or (f"{booking_id:03d}" if booking_id else "")
             if not code:
-                result = {"status": "error", "message": "booking_code (via order_id param) is required for checkin"}
+                result = {"status": "error", "message": "booking_code is required for checkin (e.g. '011')"}
             else:
+                # Ensure 3-digit zero-padded format
+                code = code.zfill(3) if code.isdigit() else code
                 result = db.checkin_by_code(namespace, code, booking_date)
         else:
             result = {"status": "error", "message": f"Unknown action: {action}. Use create/query/update/refund/query_bookings/booking_summary/cancel_booking/checkin."}
