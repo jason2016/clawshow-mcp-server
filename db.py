@@ -280,6 +280,38 @@ def checkin_by_code(namespace: str, booking_code: str, booking_date: str = "") -
     }
 
 
+def cancel_by_code(namespace: str, booking_code: str, booking_date: str = "") -> dict:
+    """Cancel a booking by its 3-digit code."""
+    with get_conn() as conn:
+        if booking_date:
+            row = conn.execute(
+                "SELECT * FROM bookings WHERE namespace = ? AND booking_code = ? AND booking_date = ? AND status = 'confirmed'",
+                (namespace, booking_code, booking_date),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM bookings WHERE namespace = ? AND booking_code = ? AND status = 'confirmed' ORDER BY booking_date DESC LIMIT 1",
+                (namespace, booking_code),
+            ).fetchone()
+        if not row:
+            any_row = conn.execute(
+                "SELECT status, customer_name FROM bookings WHERE namespace = ? AND booking_code = ? ORDER BY booking_date DESC LIMIT 1",
+                (namespace, booking_code),
+            ).fetchone()
+            if any_row:
+                return {"success": False, "error": f"#{booking_code} ({any_row['customer_name']}) has status '{any_row['status']}', cannot cancel"}
+            return {"success": False, "error": f"Booking code {booking_code} not found"}
+        booking = _row_to_dict(row)
+        conn.execute("UPDATE bookings SET status = 'cancelled' WHERE id = ?", (booking["id"],))
+    return {
+        "success": True,
+        "booking_id": booking["id"],
+        "booking_code": booking_code,
+        "customer_name": booking["customer_name"],
+        "status": "cancelled",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

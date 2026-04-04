@@ -97,6 +97,7 @@ from tools.orders import register as _register_orders
 from tools.business_page import register as _register_business_page
 from tools.inventory import register as _register_inventory
 from tools.report import register as _register_report
+from tools.bookings import register as _register_bookings
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
@@ -106,6 +107,7 @@ _register_orders(mcp, _record_call)
 _register_business_page(mcp, _record_call)
 _register_inventory(mcp, _record_call)
 _register_report(mcp, _record_call)
+_register_bookings(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint
