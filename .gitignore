@@ -6,5 +6,8 @@ data/payments/
 data/orders/
 data/inventory/
 data/reports/
+data/clawshow.db
+data/clawshow.db-wal
+data/clawshow.db-shm
 .venv/
 venv/

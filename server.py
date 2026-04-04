@@ -11,6 +11,9 @@ Endpoints (SSE mode):
   GET /sse              — MCP SSE stream
   GET /stats            — Tool call counts (JSON, CORS-enabled)
   POST /webhook/stripe  — Stripe payment webhook
+  POST /api/booking     — Create restaurant booking
+  GET /api/bookings     — Query bookings
+  GET /api/bookings/summary — Daily booking summary
 
 Usage:
   Local SSE:   python server.py
@@ -209,7 +212,51 @@ async def serve_report(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports)
+# Booking API endpoints (REST, for frontend forms)
+# ---------------------------------------------------------------------------
+
+import db
+
+
+async def api_create_booking(request: Request) -> JSONResponse:
+    """POST /api/booking — create a restaurant booking from frontend form."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    result = db.create_booking(namespace, data)
+    return JSONResponse(result, status_code=201 if result.get("success") else 400)
+
+
+async def api_query_bookings(request: Request) -> JSONResponse:
+    """GET /api/bookings?namespace=x&date=2026-04-04&status=confirmed"""
+    namespace = request.query_params.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    date = request.query_params.get("date", "")
+    status = request.query_params.get("status", "")
+    limit = int(request.query_params.get("limit", "50"))
+    bookings = db.query_bookings(namespace, date=date, status=status, limit=limit)
+    return JSONResponse({"bookings": bookings, "total": len(bookings)})
+
+
+async def api_booking_summary(request: Request) -> JSONResponse:
+    """GET /api/bookings/summary?namespace=x&date=2026-04-04"""
+    namespace = request.query_params.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    date = request.query_params.get("date", "")
+    if not date:
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    summary = db.booking_summary(namespace, date)
+    return JSONResponse(summary)
+
+
+# ---------------------------------------------------------------------------
+# Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
 
 def _build_app() -> Starlette:
@@ -218,16 +265,20 @@ def _build_app() -> Starlette:
             Route("/stats", stats, methods=["GET"]),
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
             Route("/reports/{namespace}/{filename}", serve_report, methods=["GET"]),
+            Route("/api/booking", api_create_booking, methods=["POST"]),
+            Route("/api/bookings", api_query_bookings, methods=["GET"]),
+            Route("/api/bookings/summary", api_booking_summary, methods=["GET"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
             Middleware(
                 CORSMiddleware,
+                allow_origin_regex=r"https://.*\.github\.io",
                 allow_origins=[
                     "https://clawshow.ai",
                     "https://www.clawshow.ai",
                     "https://mcp.clawshow.ai",
-                    "http://localhost:5173",   # clawshow-site dev
+                    "http://localhost:5173",
                     "http://localhost:3000",
                 ],
                 allow_methods=["GET", "POST", "OPTIONS"],

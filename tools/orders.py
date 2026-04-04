@@ -394,6 +394,7 @@ def register(mcp, record_call: Callable) -> None:
         namespace: str,
         customer_name: str = "",
         customer_email: str = "",
+        customer_phone: str = "",
         amount: float = 0,
         currency: str = "eur",
         description: str = "",
@@ -406,34 +407,43 @@ def register(mcp, record_call: Callable) -> None:
         period: str = "",
         limit: int = 20,
         order_id: str = "",
+        booking_id: int = 0,
+        booking_date: str = "",
+        booking_time: str = "",
+        booking_type: str = "emporter",
+        items: list | None = None,
         note: str = "",
         reason: str = "",
     ) -> str:
         """
-        Universal order management for any business. Create orders with automatic
-        Stripe payment link generation. Query orders by status, date, customer.
-        Update order status. Process refunds via Stripe. Works for rental bookings,
-        tuition payments, product orders, service appointments.
+        Universal order and booking management for any business. Create orders
+        with automatic Stripe payment links. Query/update/refund orders.
+        Also manages restaurant bookings (query, summary, cancel).
         Zero human intervention.
 
         Call this tool when a user wants to create an invoice, track payments,
-        manage bookings, query order status, or process refunds.
+        manage bookings, query order status, process refunds, or check
+        restaurant reservations.
 
-        Examples of natural language that should trigger this tool:
+        Examples:
         - 'Create an order for Jean Dupont, €1000 July rent'
         - 'Show me all unpaid orders for florent'
         - 'Mark order ORD-20260702-001 as paid'
         - 'Refund order ORD-20260702-003'
-        - 'How much rent is outstanding this month?'
-        - 'Crée une commande de 500€ pour la caution de Marie'
+        - 'Show me today bookings for neige-rouge'
+        - 'What are tomorrow reservations for the restaurant?'
+        - 'Cancel booking #42'
+        - 'Combien de commandes pour demain au restaurant?'
 
         Args:
-            action:           "create" | "query" | "update" | "refund"
-            namespace:        Business namespace, e.g. "florent", "school-paris"
+            action:           "create" | "query" | "update" | "refund" |
+                              "query_bookings" | "booking_summary" | "cancel_booking"
+            namespace:        Business namespace, e.g. "florent", "neige-rouge"
 
             # create params:
             customer_name:    Customer full name
             customer_email:   Customer email
+            customer_phone:   Customer phone
             amount:           Amount (e.g. 1000.00)
             currency:         ISO currency code, default "eur"
             description:      What the order is for
@@ -455,13 +465,23 @@ def register(mcp, record_call: Callable) -> None:
             # refund params:
             reason:           Refund reason
 
+            # booking params:
+            booking_id:       Booking ID (for cancel_booking)
+            booking_date:     Date filter for query_bookings / booking_summary (YYYY-MM-DD)
+            booking_time:     Time for booking
+            booking_type:     "surPlace" | "emporter"
+            items:            List of items [{id, name, qty, price}]
+
         Returns:
-            JSON with order details, query results, update confirmation, or refund receipt.
+            JSON with order/booking details, query results, or confirmation.
         """
         record_call("manage_orders")
 
+        import db
+
         params = {
             "customer_name": customer_name, "customer_email": customer_email,
+            "customer_phone": customer_phone,
             "amount": amount, "currency": currency, "description": description,
             "category": category, "due_date": due_date, "metadata": metadata or {},
             "auto_payment_link": auto_payment_link, "auto_notify": auto_notify,
@@ -477,7 +497,18 @@ def register(mcp, record_call: Callable) -> None:
             result = _action_update(namespace, params)
         elif action == "refund":
             result = _action_refund(namespace, params)
+        elif action == "query_bookings":
+            result = db.query_bookings(namespace, date=booking_date, status=status, limit=limit)
+            result = {"bookings": result, "total": len(result)}
+        elif action == "booking_summary":
+            date = booking_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            result = db.booking_summary(namespace, date)
+        elif action == "cancel_booking":
+            if not booking_id:
+                result = {"status": "error", "message": "booking_id is required for cancel_booking"}
+            else:
+                result = db.cancel_booking(namespace, booking_id)
         else:
-            result = {"status": "error", "message": f"Unknown action: {action}. Use create/query/update/refund."}
+            result = {"status": "error", "message": f"Unknown action: {action}. Use create/query/update/refund/query_bookings/booking_summary/cancel_booking."}
 
         return json.dumps(result, indent=2, ensure_ascii=False)
