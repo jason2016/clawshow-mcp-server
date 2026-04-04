@@ -21,11 +21,14 @@
 
 ## Engine Admission Criteria
 
-Every Tool must pass ALL three:
+Every Tool must pass ALL four:
 
-1. **AI can't do it alone** — must produce real-world side effects (deploy, send, charge)
-2. **Has a deliverable** — returns URL, PDF, email confirmation, payment link
-3. **Zero Human Intervention** — user receives a finished result, not intermediate data
+| # | Criterion | Source | Meaning |
+|---|-----------|--------|---------|
+| 1 | **AI can't do it alone** | ClawShow | Must produce real-world side effects (deploy, send, charge) |
+| 2 | **Has a deliverable** | ClawShow | Returns URL, PDF, email confirmation, payment link |
+| 3 | **Zero Human Intervention** | ClawShow | User receives a finished result, not intermediate data |
+| 4 | **Sell results, not tools** | Sequoia | Customer pays for outcome ("tuition collected"), not software ("billing tool") |
 
 ## The 6 Engines (Final — no additions)
 

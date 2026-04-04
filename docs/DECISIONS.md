@@ -24,3 +24,6 @@ Append-only. Record before you build.
 | 2026-04-02 | Tool descriptions must be English | Global AI discoverability. French examples in triggers are fine. |
 | 2026-04-02 | Reports served via /reports/{ns}/{file} HTTP endpoint | Simple, no CDN needed, PDF files are small |
 | 2026-04-02 | reportlab for PDF generation (not weasyprint) | Pure Python, no system dependencies, works on any VPS |
+| 2026-04-04 | Add 4th admission criterion: "Sell results, not tools" (Sequoia) | Customer pays for outcomes, not software — differentiates from SaaS tooling |
+| 2026-04-04 | Archive legacy repos (discovery-layer, email-skill, finance-skill) | Functionality merged into MCP Server, no GitHub remotes, workspace cleanup |
+| 2026-04-04 | Development directory restructure: ClawShow-Workspace + Customers + Archive | Clean separation of platform code, customer projects, and legacy |

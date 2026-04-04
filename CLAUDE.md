@@ -90,7 +90,7 @@ Every decision from Claude.ai chat MUST be written to `docs/DECISIONS.md` before
 
 ## Rules
 
-- Every Tool must pass admission: AI can't do it alone + has deliverable + zero human intervention
+- Every Tool must pass 4 admission criteria: AI can't do it alone + has deliverable + zero human intervention + sell results not tools (Sequoia)
 - Tool descriptions MUST be in English (global AI discoverability)
 - All data isolated by `namespace` parameter
 - Don't add engines — 6 is final. Workflows orchestrate, not replace.
