@@ -434,10 +434,12 @@ def register(mcp, record_call: Callable) -> None:
         - 'What are tomorrow reservations for the restaurant?'
         - 'Cancel booking #42'
         - 'Combien de commandes pour demain au restaurant?'
+        - 'Check in booking 003'
+        - '003到了' (checkin by code)
 
         Args:
             action:           "create" | "query" | "update" | "refund" |
-                              "query_bookings" | "booking_summary" | "cancel_booking"
+                              "query_bookings" | "booking_summary" | "cancel_booking" | "checkin"
             namespace:        Business namespace, e.g. "florent", "neige-rouge"
 
             # create params:
@@ -511,7 +513,13 @@ def register(mcp, record_call: Callable) -> None:
                 result = {"status": "error", "message": "booking_id is required for cancel_booking"}
             else:
                 result = db.cancel_booking(namespace, booking_id)
+        elif action == "checkin":
+            code = params.get("order_id", "") or str(booking_id) if booking_id else ""
+            if not code:
+                result = {"status": "error", "message": "booking_code (via order_id param) is required for checkin"}
+            else:
+                result = db.checkin_by_code(namespace, code, booking_date)
         else:
-            result = {"status": "error", "message": f"Unknown action: {action}. Use create/query/update/refund/query_bookings/booking_summary/cancel_booking."}
+            result = {"status": "error", "message": f"Unknown action: {action}. Use create/query/update/refund/query_bookings/booking_summary/cancel_booking/checkin."}
 
         return json.dumps(result, indent=2, ensure_ascii=False)

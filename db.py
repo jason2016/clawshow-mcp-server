@@ -57,6 +57,7 @@ def init_tables():
                 customer_email  TEXT,
                 booking_date    TEXT NOT NULL,
                 booking_time    TEXT NOT NULL,
+                booking_code    TEXT DEFAULT '',
                 type            TEXT DEFAULT 'emporter',
                 items           TEXT DEFAULT '[]',
                 total           REAL DEFAULT 0,
@@ -88,6 +89,12 @@ def init_tables():
             CREATE INDEX IF NOT EXISTS idx_bookings_ns_date ON bookings(namespace, booking_date);
             CREATE INDEX IF NOT EXISTS idx_orders_ns_status ON orders(namespace, status);
         """)
+        # Migration: add booking_code column if missing (for existing DBs)
+        try:
+            conn.execute("SELECT booking_code FROM bookings LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE bookings ADD COLUMN booking_code TEXT DEFAULT ''")
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -107,24 +114,35 @@ def ensure_namespace(namespace: str, owner_name: str = "", owner_email: str = ""
 # Booking CRUD
 # ---------------------------------------------------------------------------
 
+def _next_booking_code(conn, namespace: str, booking_date: str) -> str:
+    """Generate 3-digit code for today's bookings in this namespace, resets daily."""
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM bookings WHERE namespace = ? AND booking_date = ?",
+        (namespace, booking_date),
+    ).fetchone()
+    return f"{(row['cnt'] or 0) + 1:03d}"
+
+
 def create_booking(namespace: str, data: dict) -> dict:
     ensure_namespace(namespace, business_type="restaurant")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     items_json = json.dumps(data.get("items", []), ensure_ascii=False)
+    booking_date = data.get("booking_date", "")
 
     with get_conn() as conn:
+        code = _next_booking_code(conn, namespace, booking_date)
         cur = conn.execute(
             """INSERT INTO bookings (namespace, customer_name, customer_phone, customer_email,
-               booking_date, booking_time, type, items, total, notes, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)""",
+               booking_date, booking_time, booking_code, type, items, total, notes, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)""",
             (namespace, data.get("customer_name", ""), data.get("customer_phone", ""),
-             data.get("customer_email", ""), data.get("booking_date", ""),
-             data.get("booking_time", ""), data.get("type", "emporter"),
+             data.get("customer_email", ""), booking_date,
+             data.get("booking_time", ""), code, data.get("type", "emporter"),
              items_json, data.get("total", 0), data.get("notes", ""), now),
         )
         booking_id = cur.lastrowid
 
-    return {"success": True, "booking_id": booking_id, "namespace": namespace}
+    return {"success": True, "booking_id": booking_id, "booking_code": code, "namespace": namespace}
 
 
 def query_bookings(namespace: str, date: str = "", status: str = "", limit: int = 50) -> list[dict]:
@@ -189,6 +207,30 @@ def cancel_booking(namespace: str, booking_id: int) -> dict:
         if cur.rowcount == 0:
             return {"success": False, "error": f"Booking {booking_id} not found or already cancelled"}
     return {"success": True, "booking_id": booking_id, "status": "cancelled"}
+
+
+def checkin_by_code(namespace: str, booking_code: str, booking_date: str = "") -> dict:
+    """Check in a booking by its 3-digit code. Searches today's date by default."""
+    if not booking_date:
+        booking_date = date.today().isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM bookings WHERE namespace = ? AND booking_code = ? AND booking_date = ? AND status = 'confirmed'",
+            (namespace, booking_code, booking_date),
+        ).fetchone()
+        if not row:
+            return {"success": False, "error": f"Booking code {booking_code} not found for {booking_date}"}
+        booking = _row_to_dict(row)
+        conn.execute("UPDATE bookings SET status = 'completed' WHERE id = ?", (booking["id"],))
+    return {
+        "success": True,
+        "booking_id": booking["id"],
+        "booking_code": booking_code,
+        "customer_name": booking["customer_name"],
+        "items": booking.get("items", []),
+        "total": booking.get("total", 0),
+        "status": "completed",
+    }
 
 
 # ---------------------------------------------------------------------------

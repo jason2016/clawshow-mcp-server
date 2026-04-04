@@ -246,6 +246,21 @@ async def api_update_booking(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("success") else 400)
 
 
+async def api_checkin_booking(request: Request) -> JSONResponse:
+    """PATCH /api/booking/checkin — check in by 3-digit booking code."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    code = data.get("booking_code", "")
+    booking_date = data.get("booking_date", "")
+    if not namespace or not code:
+        return JSONResponse({"error": "namespace and booking_code are required"}, status_code=400)
+    result = db.checkin_by_code(namespace, code, booking_date)
+    return JSONResponse(result, status_code=200 if result.get("success") else 404)
+
+
 async def api_query_bookings(request: Request) -> JSONResponse:
     """GET /api/bookings?namespace=x&date=2026-04-04&status=confirmed"""
     namespace = request.query_params.get("namespace", "")
@@ -281,6 +296,7 @@ def _build_app() -> Starlette:
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
             Route("/reports/{namespace}/{filename}", serve_report, methods=["GET"]),
             Route("/api/booking", api_create_booking, methods=["POST"]),
+            Route("/api/booking/checkin", api_checkin_booking, methods=["PATCH"]),
             Route("/api/booking/{id:int}", api_update_booking, methods=["PATCH"]),
             Route("/api/bookings", api_query_bookings, methods=["GET"]),
             Route("/api/bookings/summary", api_booking_summary, methods=["GET"]),
