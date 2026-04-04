@@ -491,15 +491,18 @@ def register(mcp, record_call: Callable) -> None:
 
         if action == "create":
             result = _action_create(namespace, params)
-        elif action == "query":
-            result = _action_query(namespace, params)
+        elif action in ("query", "query_bookings"):
+            # Query both JSON orders AND SQLite bookings, return combined
+            json_result = _action_query(namespace, params)
+            bookings = db.query_bookings(namespace, date=booking_date, status=status, limit=limit)
+            if bookings or action == "query_bookings":
+                json_result["bookings"] = bookings
+                json_result["total_bookings"] = len(bookings)
+            result = json_result
         elif action == "update":
             result = _action_update(namespace, params)
         elif action == "refund":
             result = _action_refund(namespace, params)
-        elif action == "query_bookings":
-            result = db.query_bookings(namespace, date=booking_date, status=status, limit=limit)
-            result = {"bookings": result, "total": len(result)}
         elif action == "booking_summary":
             date = booking_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             result = db.booking_summary(namespace, date)
