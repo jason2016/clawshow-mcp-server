@@ -166,6 +166,20 @@ def booking_summary(namespace: str, date: str) -> dict:
     }
 
 
+def update_booking_status(namespace: str, booking_id: int, status: str) -> dict:
+    valid = ("confirmed", "completed", "cancelled", "no_show")
+    if status not in valid:
+        return {"success": False, "error": f"Invalid status. Must be one of: {', '.join(valid)}"}
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE bookings SET status = ? WHERE id = ? AND namespace = ?",
+            (status, booking_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Booking {booking_id} not found in namespace '{namespace}'"}
+    return {"success": True, "booking_id": booking_id, "status": status}
+
+
 def cancel_booking(namespace: str, booking_id: int) -> dict:
     with get_conn() as conn:
         cur = conn.execute(

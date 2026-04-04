@@ -231,6 +231,21 @@ async def api_create_booking(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=201 if result.get("success") else 400)
 
 
+async def api_update_booking(request: Request) -> JSONResponse:
+    """PATCH /api/booking/{id} — update booking status."""
+    booking_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    status = data.get("status", "")
+    if not namespace or not status:
+        return JSONResponse({"error": "namespace and status are required"}, status_code=400)
+    result = db.update_booking_status(namespace, booking_id, status)
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
 async def api_query_bookings(request: Request) -> JSONResponse:
     """GET /api/bookings?namespace=x&date=2026-04-04&status=confirmed"""
     namespace = request.query_params.get("namespace", "")
@@ -266,6 +281,7 @@ def _build_app() -> Starlette:
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
             Route("/reports/{namespace}/{filename}", serve_report, methods=["GET"]),
             Route("/api/booking", api_create_booking, methods=["POST"]),
+            Route("/api/booking/{id:int}", api_update_booking, methods=["PATCH"]),
             Route("/api/bookings", api_query_bookings, methods=["GET"]),
             Route("/api/bookings/summary", api_booking_summary, methods=["GET"]),
             Mount("/", app=mcp.sse_app()),
@@ -281,7 +297,7 @@ def _build_app() -> Starlette:
                     "http://localhost:5173",
                     "http://localhost:3000",
                 ],
-                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
                 allow_headers=["*"],
             )
         ],
