@@ -257,7 +257,16 @@ def checkin_by_code(namespace: str, booking_code: str, booking_date: str = "") -
                 (namespace, booking_code),
             ).fetchone()
         if not row:
-            return {"success": False, "error": f"Booking code {booking_code} not found (confirmed)"}
+            # Check if it exists but with a different status
+            any_row = conn.execute(
+                "SELECT status, customer_name FROM bookings WHERE namespace = ? AND booking_code = ? ORDER BY booking_date DESC LIMIT 1",
+                (namespace, booking_code),
+            ).fetchone()
+            if any_row and any_row["status"] == "completed":
+                return {"success": True, "already": True, "booking_code": booking_code, "customer_name": any_row["customer_name"], "status": "completed", "message": f"#{booking_code} ({any_row['customer_name']}) already checked in"}
+            if any_row:
+                return {"success": False, "error": f"#{booking_code} ({any_row['customer_name']}) has status '{any_row['status']}', cannot check in"}
+            return {"success": False, "error": f"Booking code {booking_code} not found"}
         booking = _row_to_dict(row)
         conn.execute("UPDATE bookings SET status = 'completed' WHERE id = ?", (booking["id"],))
     return {
