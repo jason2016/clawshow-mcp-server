@@ -243,16 +243,21 @@ def cancel_booking(namespace: str, booking_id: int) -> dict:
 
 
 def checkin_by_code(namespace: str, booking_code: str, booking_date: str = "") -> dict:
-    """Check in a booking by its 3-digit code. Searches today's date by default."""
-    if not booking_date:
-        booking_date = date.today().isoformat()
+    """Check in a booking by its 3-digit code. If no date given, search all confirmed bookings."""
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM bookings WHERE namespace = ? AND booking_code = ? AND booking_date = ? AND status = 'confirmed'",
-            (namespace, booking_code, booking_date),
-        ).fetchone()
+        if booking_date:
+            row = conn.execute(
+                "SELECT * FROM bookings WHERE namespace = ? AND booking_code = ? AND booking_date = ? AND status = 'confirmed'",
+                (namespace, booking_code, booking_date),
+            ).fetchone()
+        else:
+            # No date — find any confirmed booking with this code (most recent first)
+            row = conn.execute(
+                "SELECT * FROM bookings WHERE namespace = ? AND booking_code = ? AND status = 'confirmed' ORDER BY booking_date DESC LIMIT 1",
+                (namespace, booking_code),
+            ).fetchone()
         if not row:
-            return {"success": False, "error": f"Booking code {booking_code} not found for {booking_date}"}
+            return {"success": False, "error": f"Booking code {booking_code} not found (confirmed)"}
         booking = _row_to_dict(row)
         conn.execute("UPDATE bookings SET status = 'completed' WHERE id = ?", (booking["id"],))
     return {
