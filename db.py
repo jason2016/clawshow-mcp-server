@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -94,7 +94,28 @@ def init_tables():
             conn.execute("SELECT booking_code FROM bookings LIMIT 1")
         except Exception:
             conn.execute("ALTER TABLE bookings ADD COLUMN booking_code TEXT DEFAULT ''")
+        # Backfill empty booking_codes (ordered by created_at within each week)
+        empty = conn.execute(
+            "SELECT id, namespace, booking_date FROM bookings WHERE booking_code = '' OR booking_code IS NULL ORDER BY created_at"
+        ).fetchall()
+        for row in empty:
+            code = _next_booking_code_for_backfill(conn, row["namespace"], row["booking_date"])
+            conn.execute("UPDATE bookings SET booking_code = ? WHERE id = ?", (code, row["id"]))
         conn.commit()
+
+
+def _next_booking_code_for_backfill(conn, namespace: str, booking_date: str) -> str:
+    """Backfill helper — same weekly logic but only counts already-coded bookings."""
+    monday = _week_start(booking_date)
+    sunday = (date.fromisoformat(monday) + timedelta(days=6)).isoformat()
+    row = conn.execute(
+        "SELECT MAX(CAST(booking_code AS INTEGER)) as mx FROM bookings WHERE namespace = ? AND booking_date >= ? AND booking_date <= ? AND booking_code != '' AND booking_code IS NOT NULL",
+        (namespace, monday, sunday),
+    ).fetchone()
+    nxt = ((row["mx"] or 0) + 1) % 1000
+    if nxt == 0:
+        nxt = 1
+    return f"{nxt:03d}"
 
 
 # ---------------------------------------------------------------------------
@@ -114,13 +135,25 @@ def ensure_namespace(namespace: str, owner_name: str = "", owner_email: str = ""
 # Booking CRUD
 # ---------------------------------------------------------------------------
 
+def _week_start(d: str) -> str:
+    """Return Monday's date (ISO) for the week containing date string d."""
+    dt = date.fromisoformat(d)
+    monday = dt - timedelta(days=dt.weekday())
+    return monday.isoformat()
+
+
 def _next_booking_code(conn, namespace: str, booking_date: str) -> str:
-    """Generate 3-digit code for today's bookings in this namespace, resets daily."""
+    """Generate 3-digit code, resets weekly (Monday 001). Across all days in the same week."""
+    monday = _week_start(booking_date)
+    sunday = (date.fromisoformat(monday) + timedelta(days=6)).isoformat()
     row = conn.execute(
-        "SELECT COUNT(*) as cnt FROM bookings WHERE namespace = ? AND booking_date = ?",
-        (namespace, booking_date),
+        "SELECT MAX(CAST(booking_code AS INTEGER)) as mx FROM bookings WHERE namespace = ? AND booking_date >= ? AND booking_date <= ? AND booking_code != ''",
+        (namespace, monday, sunday),
     ).fetchone()
-    return f"{(row['cnt'] or 0) + 1:03d}"
+    nxt = ((row["mx"] or 0) + 1) % 1000
+    if nxt == 0:
+        nxt = 1
+    return f"{nxt:03d}"
 
 
 def create_booking(namespace: str, data: dict) -> dict:
