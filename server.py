@@ -23,6 +23,12 @@ Usage:
 import os
 import json
 import argparse
+import smtplib
+import ssl
+import logging
+import threading
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -219,6 +225,84 @@ async def serve_report(request: Request):
 
 import db
 
+logger = logging.getLogger("clawshow")
+
+
+def _send_booking_email(data: dict, booking_code: str) -> None:
+    """Send booking confirmation email via SMTP (runs in background thread)."""
+    try:
+        email_to = data.get("customer_email", "")
+        if not email_to:
+            return
+
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        from_name = os.getenv("SMTP_FROM_NAME", "Neige Rouge")
+
+        if not host or not user:
+            logger.warning("SMTP not configured, skipping booking email")
+            return
+
+        customer_name = data.get("customer_name", "")
+        booking_date = data.get("booking_date", "")
+        booking_time = data.get("booking_time", "")
+        items = data.get("items", [])
+        total = data.get("total", 0)
+        order_type = "Sur place / 堂食" if data.get("type") == "surPlace" else "À emporter / 外带"
+        notes = data.get("notes", "")
+
+        items_html = ""
+        for item in items:
+            items_html += f'<tr><td style="padding:6px 12px;border-bottom:1px solid #eee">{item.get("name","")}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;text-align:center">×{item.get("qty",1)}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;text-align:right">{item.get("price",0):.2f}€</td></tr>'
+
+        html = f"""
+        <div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
+          <div style="background:#8B0000;padding:24px;text-align:center;border-radius:12px 12px 0 0">
+            <h1 style="color:white;margin:0;font-size:22px">Neige Rouge 红雪餐厅</h1>
+            <p style="color:rgba(255,255,255,0.8);margin:8px 0 0;font-size:13px">Réservation confirmée · 预订已确认</p>
+          </div>
+          <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">
+            <div style="text-align:center;margin-bottom:24px">
+              <div style="font-size:13px;color:#999;margin-bottom:4px">N° de réservation · 预订号</div>
+              <div style="font-size:42px;font-weight:900;color:#8B0000;letter-spacing:6px">#{booking_code}</div>
+            </div>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+              <tr><td style="padding:8px 0;color:#999;width:40%">Date · 日期</td><td style="padding:8px 0;font-weight:600">{booking_date}</td></tr>
+              <tr><td style="padding:8px 0;color:#999">Heure · 时间</td><td style="padding:8px 0;font-weight:600">{booking_time}</td></tr>
+              <tr><td style="padding:8px 0;color:#999">Type · 类型</td><td style="padding:8px 0;font-weight:600">{order_type}</td></tr>
+              <tr><td style="padding:8px 0;color:#999">Nom · 姓名</td><td style="padding:8px 0;font-weight:600">{customer_name}</td></tr>
+              {"<tr><td style='padding:8px 0;color:#999'>Remarques · 备注</td><td style='padding:8px 0'>" + notes + "</td></tr>" if notes else ""}
+            </table>
+            <h3 style="font-size:14px;color:#999;text-transform:uppercase;letter-spacing:1px;margin:20px 0 8px">Commande · 订单明细</h3>
+            <table style="width:100%;border-collapse:collapse">
+              {items_html}
+              <tr style="font-weight:700;font-size:16px"><td style="padding:12px 12px 6px" colspan="2">Total · 合计</td><td style="padding:12px 12px 6px;text-align:right;color:#8B0000">{total:.2f}€</td></tr>
+            </table>
+          </div>
+          <div style="background:#faf8f5;padding:20px;text-align:center;border:1px solid #eee;border-top:none;border-radius:0 0 12px 12px">
+            <p style="margin:0 0 8px;font-size:14px"><strong>7 rue des Ursulines, 75005 Paris</strong></p>
+            <p style="margin:0 0 12px;font-size:14px">📞 01 72 60 46 89</p>
+            <p style="margin:0;color:#8B0000;font-weight:600;font-size:15px">Merci pour votre commande ! 感谢您的订单！</p>
+          </div>
+        </div>
+        """
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Réservation confirmée #{booking_code} | Neige Rouge 红雪餐厅"
+        msg["From"] = f"{from_name} <{user}>"
+        msg["To"] = email_to
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
+            srv.login(user, pwd)
+            srv.send_message(msg)
+        logger.info(f"Booking confirmation email sent to {email_to} (#{booking_code})")
+    except Exception:
+        logger.exception("Failed to send booking confirmation email")
+
 
 async def api_create_booking(request: Request) -> JSONResponse:
     """POST /api/booking — create a restaurant booking from frontend form."""
@@ -230,6 +314,12 @@ async def api_create_booking(request: Request) -> JSONResponse:
     if not namespace:
         return JSONResponse({"error": "namespace is required"}, status_code=400)
     result = db.create_booking(namespace, data)
+    if result.get("success"):
+        threading.Thread(
+            target=_send_booking_email,
+            args=(data, result.get("booking_code", "")),
+            daemon=True,
+        ).start()
     return JSONResponse(result, status_code=201 if result.get("success") else 400)
 
 
