@@ -6,13 +6,14 @@ No third-party e-sign service required.
 
 Flow:
   1. Generate document_id (esign_YYYY_NNNN)
-  2. Render HTML template → PDF via reportlab
-  3. Save PDF to /opt/clawshow-data/esign/{namespace}/{doc_id}.pdf
-  4. Create DB record with signing_url = https://mcp.clawshow.ai/esign/{doc_id}
-  5. Email signing link to signer (optional)
-  6. Return signing_url + document_id
+  2. Read HTML template, replace {{variable}} placeholders
+  3. Render HTML -> PDF via weasyprint
+  4. Save rendered HTML + PDF to /opt/clawshow-data/esign/{namespace}/
+  5. Create DB record with signing_url = https://mcp.clawshow.ai/esign/{doc_id}
+  6. Email signing link to signer (optional)
+  7. Return signing_url + document_id
 
-Signing page: GET /esign/{doc_id}  — served by server.py
+Signing page: GET /esign/{doc_id}  -- served by server.py
 Signature submission: POST /esign/{doc_id}/sign
 
 Env required: SMTP_HOST, SMTP_USER, SMTP_PASS (for email)
@@ -20,8 +21,10 @@ Env required: SMTP_HOST, SMTP_USER, SMTP_PASS (for email)
 
 from __future__ import annotations
 
+import base64
 import os
 import json
+import re
 import smtplib
 import ssl
 import threading
@@ -32,8 +35,44 @@ from typing import Callable
 import db
 
 ESIGN_DATA_DIR = Path("/opt/clawshow-data/esign")
+TEMPLATES_DIR = ESIGN_DATA_DIR / "templates"
 BASE_URL = os.environ.get("MCP_BASE_URL", "https://mcp.clawshow.ai")
 
+# ---------------------------------------------------------------------------
+# Fallback contract templates (used when no HTML file found)
+# ---------------------------------------------------------------------------
+
+_FALLBACK_TEMPLATES: dict = {
+    "rental_agreement": {
+        "title": "CONTRAT DE LOCATION",
+        "body": lambda f, sn: (
+            f"<h3>Bailleur : {f.get('landlord_name', '')}</h3>"
+            f"<h3>Locataire : {f.get('tenant_name', sn)}</h3>"
+            f"<p><strong>Bien loue :</strong> {f.get('property_address', '')}</p>"
+            f"<p><strong>Loyer mensuel :</strong> {f.get('rent_amount', '')} EUR</p>"
+            f"<p><strong>Periode :</strong> du {f.get('start_date', '')} au {f.get('end_date', '')}</p>"
+            f"<p>{f.get('terms', '')}</p>"
+        ),
+    },
+    "service_agreement": {
+        "title": "CONTRAT DE PRESTATION",
+        "body": lambda f, sn: (
+            f"<h3>Prestataire : {f.get('provider_name', '')}</h3>"
+            f"<h3>Client : {f.get('client_name', sn)}</h3>"
+            f"<p><strong>Prestation :</strong> {f.get('service_description', '')}</p>"
+            f"<p><strong>Honoraires :</strong> {f.get('fee', '')} EUR</p>"
+            f"<p><strong>Date de debut :</strong> {f.get('start_date', '')}</p>"
+            f"<p>{f.get('terms', '')}</p>"
+        ),
+    },
+    "custom": {
+        "title": "DOCUMENT",
+        "body": lambda f, sn: "".join(
+            f"<p><strong>{k.replace('_', ' ').title()} :</strong> {v}</p>"
+            for k, v in f.items() if k != "title"
+        ),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Document ID generation
@@ -42,7 +81,6 @@ BASE_URL = os.environ.get("MCP_BASE_URL", "https://mcp.clawshow.ai")
 def _next_doc_id(namespace: str) -> str:
     """Generate esign_YYYY_NNNN style ID."""
     year = datetime.now(timezone.utc).year
-    doc = db.get_conn()
     with db.get_conn() as conn:
         row = conn.execute(
             "SELECT COUNT(*) as cnt FROM esign_documents WHERE namespace = ? AND id LIKE ?",
@@ -53,167 +91,150 @@ def _next_doc_id(namespace: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# PDF generation (reportlab)
+# HTML template rendering
 # ---------------------------------------------------------------------------
 
-TEMPLATES = {
-    "enrollment_contract": {
-        "title": "CONTRAT D'INSCRIPTION",
-        "fields": ["school_name", "student_name", "program", "school_year", "tuition", "terms", "date"],
-    },
-    "rental_agreement": {
-        "title": "CONTRAT DE LOCATION",
-        "fields": ["landlord_name", "tenant_name", "property_address", "rent_amount", "start_date", "end_date", "terms", "date"],
-    },
-    "service_agreement": {
-        "title": "CONTRAT DE PRESTATION DE SERVICES",
-        "fields": ["provider_name", "client_name", "service_description", "fee", "start_date", "terms", "date"],
-    },
-    "custom": {
-        "title": "DOCUMENT",
-        "fields": [],
-    },
-}
+def _render_template(template: str, doc_id: str, signer_name: str, fields: dict) -> str:
+    """Load HTML template and substitute {{variable}} placeholders. Returns rendered HTML string."""
+    html_path = TEMPLATES_DIR / f"{template}.html"
+
+    if html_path.exists():
+        html = html_path.read_text(encoding="utf-8")
+        all_vars = {"document_id": doc_id, **fields}
+        for key, value in all_vars.items():
+            html = html.replace("{{" + key + "}}", str(value))
+        # Remove any remaining unreplaced placeholders
+        html = re.sub(r"\{\{[^}]+\}\}", "", html)
+        return html
+
+    # Fallback: generate simple HTML
+    tmpl = _FALLBACK_TEMPLATES.get(template, _FALLBACK_TEMPLATES["custom"])
+    title = fields.get("title", tmpl["title"])
+    body_html = tmpl["body"](fields, signer_name)
+    return f"""<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8">
+<style>
+body {{ font-family: Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 40px; color: #333; }}
+h1 {{ text-align: center; text-transform: uppercase; }}
+p {{ line-height: 1.6; }}
+.sig-block {{ margin-top: 60px; }}
+</style></head>
+<body>
+<h1>{title}</h1>
+{body_html}
+<div class="sig-block">
+  <p>Fait a : <span id="city-placeholder">___________________</span></p>
+  <p>Le : <span id="date-placeholder">___________________</span></p>
+  <p>Mention manuscrite lu et approuve :</p>
+  <div id="lu-approuve-placeholder" style="height:50px;border-bottom:1px solid #000;width:260px;"></div>
+  <p style="margin-top:16px;">Signature de {signer_name} :</p>
+  <div id="signature-placeholder" style="height:80px;border-bottom:1px solid #000;width:260px;"></div>
+</div>
+<div style="margin-top:30px;font-size:9pt;color:#999;text-align:center;border-top:1px solid #eee;padding-top:8px;">
+  Document ID : {doc_id} | Signe electroniquement via ClawShow eSign | mcp.clawshow.ai
+</div>
+</body></html>"""
 
 
-def _generate_pdf(doc_id: str, namespace: str, template: str, signer_name: str, fields: dict) -> str:
-    """Generate unsigned PDF, return local file path."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
-    from reportlab.lib import colors
+def _html_to_pdf(html: str, out_path: str) -> None:
+    """Render HTML string to PDF using weasyprint."""
+    from weasyprint import HTML
+    HTML(string=html, base_url=str(TEMPLATES_DIR)).write_pdf(out_path)
 
+
+def _generate_pdf(doc_id: str, namespace: str, template: str, signer_name: str, fields: dict) -> tuple:
+    """
+    Render template and generate PDF.
+    Returns (html_path, pdf_path).
+    """
     out_dir = ESIGN_DATA_DIR / namespace
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    rendered_html = _render_template(template, doc_id, signer_name, fields)
+
+    html_path = str(out_dir / f"{doc_id}.html")
     pdf_path = str(out_dir / f"{doc_id}.pdf")
 
-    doc = SimpleDocTemplate(pdf_path, pagesize=A4,
-                            rightMargin=2*cm, leftMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
+    Path(html_path).write_text(rendered_html, encoding="utf-8")
+    _html_to_pdf(rendered_html, pdf_path)
 
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("Title", parent=styles["Title"],
-                                  fontSize=16, spaceAfter=6, alignment=TA_CENTER)
-    h2_style = ParagraphStyle("H2", parent=styles["Heading2"],
-                               fontSize=12, spaceBefore=12, spaceAfter=4)
-    body_style = ParagraphStyle("Body", parent=styles["Normal"],
-                                 fontSize=11, leading=16)
-    small_style = ParagraphStyle("Small", parent=styles["Normal"],
-                                  fontSize=9, textColor=colors.grey, alignment=TA_CENTER)
-
-    tmpl_meta = TEMPLATES.get(template, TEMPLATES["custom"])
-    title = fields.get("title", tmpl_meta["title"])
-
-    story = []
-    story.append(Paragraph(title, title_style))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
-    story.append(Spacer(1, 0.5*cm))
-
-    # Render fields as paragraphs — custom template uses raw key/value pairs
-    if template == "enrollment_contract":
-        story.append(Paragraph(f"Entre l'établissement <b>{fields.get('school_name','')}</b>", body_style))
-        story.append(Paragraph(f"et l'étudiant(e) <b>{fields.get('student_name', signer_name)}</b>,", body_style))
-        story.append(Spacer(1, 0.4*cm))
-        story.append(Paragraph("Article 1 — Programme", h2_style))
-        story.append(Paragraph(f"L'étudiant(e) est inscrit(e) au programme : <b>{fields.get('program','')}</b>", body_style))
-        story.append(Paragraph(f"Année scolaire : <b>{fields.get('school_year','')}</b>", body_style))
-        story.append(Paragraph("Article 2 — Frais de scolarité", h2_style))
-        story.append(Paragraph(f"Le montant total des frais de scolarité s'élève à : <b>{fields.get('tuition','')}</b>", body_style))
-        if fields.get("terms"):
-            story.append(Paragraph("Article 3 — Conditions générales", h2_style))
-            story.append(Paragraph(fields["terms"], body_style))
-    elif template == "rental_agreement":
-        story.append(Paragraph(f"Entre le bailleur <b>{fields.get('landlord_name','')}</b>", body_style))
-        story.append(Paragraph(f"et le locataire <b>{fields.get('tenant_name', signer_name)}</b>,", body_style))
-        story.append(Spacer(1, 0.4*cm))
-        story.append(Paragraph("Article 1 — Bien loué", h2_style))
-        story.append(Paragraph(f"Adresse : <b>{fields.get('property_address','')}</b>", body_style))
-        story.append(Paragraph("Article 2 — Loyer", h2_style))
-        story.append(Paragraph(f"Loyer mensuel : <b>{fields.get('rent_amount','')}</b>", body_style))
-        story.append(Paragraph(f"Du <b>{fields.get('start_date','')}</b> au <b>{fields.get('end_date','')}</b>", body_style))
-        if fields.get("terms"):
-            story.append(Paragraph("Article 3 — Conditions", h2_style))
-            story.append(Paragraph(fields["terms"], body_style))
-    elif template == "service_agreement":
-        story.append(Paragraph(f"Entre le prestataire <b>{fields.get('provider_name','')}</b>", body_style))
-        story.append(Paragraph(f"et le client <b>{fields.get('client_name', signer_name)}</b>,", body_style))
-        story.append(Spacer(1, 0.4*cm))
-        story.append(Paragraph("Article 1 — Prestation", h2_style))
-        story.append(Paragraph(fields.get("service_description", ""), body_style))
-        story.append(Paragraph("Article 2 — Honoraires", h2_style))
-        story.append(Paragraph(f"Montant : <b>{fields.get('fee','')}</b>", body_style))
-        story.append(Paragraph(f"Date de début : <b>{fields.get('start_date','')}</b>", body_style))
-        if fields.get("terms"):
-            story.append(Paragraph("Article 3 — Conditions", h2_style))
-            story.append(Paragraph(fields["terms"], body_style))
-    else:
-        # Custom: render all key-value fields
-        for k, v in fields.items():
-            if k not in ("title",):
-                story.append(Paragraph(f"<b>{k.replace('_',' ').title()} :</b> {v}", body_style))
-
-    # Signature zone
-    story.append(Spacer(1, 1.5*cm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
-    story.append(Spacer(1, 0.3*cm))
-    story.append(Paragraph(f"Date : {fields.get('date', datetime.now(timezone.utc).strftime('%Y-%m-%d'))}", body_style))
-    story.append(Spacer(1, 0.3*cm))
-    story.append(Paragraph(f"Signature de {signer_name} :", body_style))
-    story.append(Spacer(1, 2.5*cm))  # space for signature image
-    story.append(HRFlowable(width=8*cm, thickness=1, color=colors.black))
-    story.append(Spacer(1, 0.8*cm))
-    story.append(Paragraph("Document signé électroniquement via ClawShow eSign · mcp.clawshow.ai", small_style))
-
-    doc.build(story)
-    return pdf_path
+    return html_path, pdf_path
 
 
-def _embed_signature_in_pdf(original_pdf: str, signed_pdf: str,
-                              signature_png_bytes: bytes, signer_name: str,
-                              signed_at: str, signer_ip: str) -> None:
-    """Embed signature image onto last page of PDF using reportlab + PyPDF."""
-    import io
-    from reportlab.pdfgen import canvas as rl_canvas
-    from reportlab.lib.pagesizes import A4
+# ---------------------------------------------------------------------------
+# Signature embedding (re-render signed HTML via weasyprint)
+# ---------------------------------------------------------------------------
 
-    # Build a single-page overlay PDF with the signature
-    overlay_buf = io.BytesIO()
-    c = rl_canvas.Canvas(overlay_buf, pagesize=A4)
-    w, h = A4
+def _embed_signature_in_pdf(
+    rendered_html_path: str,
+    signed_pdf: str,
+    signature_png_bytes: bytes,
+    signer_name: str,
+    signed_at: str,
+    signer_ip: str,
+    lu_approuve_png_bytes: bytes = b"",
+    city: str = "Paris",
+) -> None:
+    """
+    Replace placeholder divs in the rendered HTML with actual signature images,
+    fill city and date, then re-render to produce the signed PDF.
+    """
+    html = Path(rendered_html_path).read_text(encoding="utf-8")
 
-    # Embed signature image
-    img_buf = io.BytesIO(signature_png_bytes)
-    from reportlab.lib.utils import ImageReader
-    img = ImageReader(img_buf)
-    # Position: left side, about 5cm from bottom
-    c.drawImage(img, 2*28.35, 4.5*28.35, width=8*28.35, height=2*28.35,
-                mask="auto", preserveAspectRatio=True)
-    # Metadata text below signature
-    c.setFont("Helvetica", 8)
-    c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(2*28.35, 4.2*28.35, f"Signé par : {signer_name}  |  IP : {signer_ip}  |  {signed_at}")
-    c.save()
-    overlay_buf.seek(0)
-
-    # Merge overlay onto original using pypdf
     try:
-        from pypdf import PdfReader, PdfWriter
-    except ImportError:
-        from PyPDF2 import PdfReader, PdfWriter
+        dt = datetime.fromisoformat(signed_at.replace("Z", "+00:00"))
+        date_str = dt.strftime("%d/%m/%Y a %H:%M UTC")
+    except Exception:
+        date_str = signed_at[:10]
 
-    reader = PdfReader(original_pdf)
-    overlay_reader = PdfReader(overlay_buf)
-    writer = PdfWriter()
+    sig_b64 = base64.b64encode(signature_png_bytes).decode()
 
-    for i, page in enumerate(reader.pages):
-        if i == len(reader.pages) - 1:
-            page.merge_page(overlay_reader.pages[0])
-        writer.add_page(page)
+    # Replace city placeholder
+    html = re.sub(
+        r'<span id="city-placeholder">[^<]*</span>',
+        f'<span id="city-placeholder">{city}</span>',
+        html,
+    )
+    # Replace date placeholder
+    html = re.sub(
+        r'<span id="date-placeholder">[^<]*</span>',
+        f'<span id="date-placeholder">{date_str}</span>',
+        html,
+    )
+    # Replace lu-approuve placeholder div with image (if available)
+    if lu_approuve_png_bytes:
+        lu_b64 = base64.b64encode(lu_approuve_png_bytes).decode()
+        html = re.sub(
+            r'<div id="lu-approuve-placeholder"[^>]*>.*?</div>',
+            (
+                '<div id="lu-approuve-placeholder" style="width:260px;height:50px;">'
+                f'<img src="data:image/png;base64,{lu_b64}" style="max-width:260px;max-height:50px;"/></div>'
+            ),
+            html,
+            flags=re.DOTALL,
+        )
+    # Replace signature placeholder div with image
+    html = re.sub(
+        r'<div id="signature-placeholder"[^>]*>.*?</div>',
+        (
+            '<div id="signature-placeholder" style="width:260px;height:80px;">'
+            f'<img src="data:image/png;base64,{sig_b64}" style="max-width:260px;max-height:80px;"/></div>'
+        ),
+        html,
+        flags=re.DOTALL,
+    )
 
-    with open(signed_pdf, "wb") as f:
-        writer.write(f)
+    # Inject metadata footer
+    meta = (
+        '<div style="margin-top:16px;padding:8px;background:#f9f9f9;border:1px solid #ddd;'
+        'font-size:9pt;color:#555;font-family:Arial,sans-serif;">'
+        f'Signe electroniquement par : <strong>{signer_name}</strong> | '
+        f'Date : {date_str} | IP : {signer_ip} | Ville : {city}'
+        '</div>'
+    )
+    html = html.replace("</body>", meta + "\n</body>")
+
+    _html_to_pdf(html, signed_pdf)
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +252,7 @@ def _send_signing_email(signer_name: str, signer_email: str, signing_url: str,
             return
 
         labels = {
-            "fr": ("Document à signer", "Bonjour", "Vous avez reçu un document à signer.", "Signer le document"),
+            "fr": ("Document a signer", "Bonjour", "Vous avez recu un document a signer.", "Signer le document"),
             "en": ("Document to sign", "Hello", "You have received a document to sign.", "Sign document"),
             "zh": ("请签署文件", "您好", "您收到了一份需要签署的文件。", "签署文件"),
         }.get(language, ("Document to sign", "Hello", "You have received a document to sign.", "Sign document"))
@@ -297,20 +318,20 @@ def register(mcp, record_call: Callable) -> None:
         automatically stored and a webhook callback updates the source system.
         Input: template type, signer name, signer email, document fields, namespace.
         Output: signing page URL, document ID, status.
-        Zero cost per signature — no third-party e-signature service required.
+        Zero cost per signature -- no third-party e-signature service required.
         Fully self-hosted. Compliant with eIDAS and ESIGN Act.
 
         Args:
-            template:     Document template — "enrollment_contract", "rental_agreement",
+            template:     Document template -- "enrollment_contract", "rental_agreement",
                           "service_agreement", or "custom"
             signer_name:  Full name of the person who will sign
             signer_email: Email address of the signer (signing link sent here)
-            fields:       Template variables dict, e.g. {school_name: "ILCI", tuition: "8500€"}
+            fields:       Template variables dict, e.g. {school_name: "ILCI", tuition: "8500"}
             namespace:    Client namespace (e.g. "ilci", "florent")
             reference_id: Optional external ID, e.g. FocusingPro inscription_id
             callback_url: Optional webhook URL called when signing is complete
             send_email:   Whether to email the signing link (default True)
-            language:     Signing page language — "fr", "en", or "zh" (default "fr")
+            language:     Signing page language -- "fr", "en", or "zh" (default "fr")
 
         Returns:
             JSON with signing_url, document_id, pdf_preview_url, status, signer_email, created_at.
@@ -322,7 +343,7 @@ def register(mcp, record_call: Callable) -> None:
         pdf_preview_url = f"{BASE_URL}/esign/{doc_id}/preview.pdf"
 
         try:
-            pdf_path = _generate_pdf(doc_id, namespace, template, signer_name, fields)
+            html_path, pdf_path = _generate_pdf(doc_id, namespace, template, signer_name, fields)
         except Exception as e:
             return json.dumps({"success": False, "error": f"PDF generation failed: {e}"}, ensure_ascii=False)
 
@@ -335,6 +356,7 @@ def register(mcp, record_call: Callable) -> None:
             fields=fields,
             signing_url=signing_url,
             original_pdf_path=pdf_path,
+            rendered_html_path=html_path,
             reference_id=reference_id,
             callback_url=callback_url,
             language=language,
