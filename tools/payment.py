@@ -28,13 +28,10 @@ import requests
 # Per-namespace payment config
 # ---------------------------------------------------------------------------
 
-def _get_stancer_keys(namespace: str) -> tuple[str, str]:
-    """Return (secret_key, public_key) for Stancer, per namespace."""
+def _get_stancer_key(namespace: str) -> str:
+    """Return secret_key for Stancer, per namespace."""
     # Future: load from DB per namespace. For now, env vars = global default.
-    return (
-        os.environ.get("STANCER_SECRET_KEY", ""),
-        os.environ.get("STANCER_PUBLIC_KEY", ""),
-    )
+    return os.environ.get("STANCER_SECRET_KEY", "")
 
 
 def _get_sumup_keys(namespace: str) -> tuple[str, str]:
@@ -56,11 +53,9 @@ def _create_stancer_payment(
     description: str,
     return_url: str | None,
 ) -> dict:
-    secret_key, public_key = _get_stancer_keys(namespace)
+    secret_key = _get_stancer_key(namespace)
     if not secret_key:
         return {"success": False, "error": "STANCER_SECRET_KEY not configured"}
-    if not public_key:
-        return {"success": False, "error": "STANCER_PUBLIC_KEY not configured"}
 
     auth = base64.b64encode(f"{secret_key}:".encode()).decode()
     payload: dict = {
@@ -87,7 +82,9 @@ def _create_stancer_payment(
         return {"success": False, "error": f"Stancer API error: {e}"}
 
     payment_id = data.get("id", "")
-    payment_url = f"https://payment.stancer.com/{public_key}/{payment_id}"
+    payment_url = data.get("url", "")
+    if not payment_url:
+        return {"success": False, "error": "Stancer API did not return a payment URL", "raw": data}
 
     return {
         "success": True,
@@ -101,7 +98,7 @@ def _create_stancer_payment(
 
 
 def _verify_stancer_payment(namespace: str, payment_id: str) -> dict:
-    secret_key, _ = _get_stancer_keys(namespace)
+    secret_key = _get_stancer_key(namespace)
     if not secret_key:
         return {"success": False, "error": "STANCER_SECRET_KEY not configured"}
 
