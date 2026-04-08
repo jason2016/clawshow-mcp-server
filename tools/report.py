@@ -472,11 +472,13 @@ def register(mcp, record_call: Callable) -> None:
         sections: list | None = None,
     ) -> str:
         """
-        Generate professional PDF reports and return a download URL.
-        Supports financial reports, inventory reports, order summaries,
-        enrollment statistics, and custom reports. Data can be provided
-        directly or pulled from existing orders/inventory.
-        Returns a publicly accessible PDF URL. Zero human intervention.
+        Generate professional PDF business reports and return a download URL.
+        Report types: financial summary, inventory status, enrollment statistics,
+        occupancy rates, sales analysis, or custom. Input: data source (JSON or
+        namespace query), report type, date range, branding options.
+        Output: PDF download URL. Reports include charts, tables, and executive
+        summary. Ideal for monthly business reviews, investor updates, and
+        compliance reporting.
 
         Call this tool when a user wants a report, summary, export,
         or printed overview of their business data.

@@ -417,10 +417,13 @@ def register(mcp, record_call: Callable) -> None:
         reason: str = "",
     ) -> str:
         """
-        Universal order and booking management for any business. Create orders
-        with automatic Stripe payment links. Query/update/refund orders.
-        Also manages restaurant bookings (query, summary, cancel).
-        Zero human intervention.
+        Create, query, update, and process refunds for orders. Works for any
+        transaction-based business: restaurants, e-commerce, schools, service
+        providers. Auto-creates orders from payment webhooks when integrated
+        with generate_payment. Input: action (create/query/update/refund), order
+        data, namespace. Output: order details with status, line items, payment
+        info. Supports status tracking: pending → paid → processing → completed
+        → refunded. Namespace-isolated for multi-tenant use.
 
         Call this tool when a user wants to create an invoice, track payments,
         manage bookings, query order status, process refunds, or check

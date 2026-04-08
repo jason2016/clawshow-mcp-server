@@ -24,8 +24,13 @@ def register(mcp, record_call: Callable) -> None:
         status: str = "",
     ) -> str:
         """
-        Manage restaurant bookings. Query today's orders, check in customers
-        by their 3-digit booking code, view daily summary, or cancel bookings.
+        Create, query, update, and cancel bookings for any reservation-based
+        business: restaurants, hotels, salons, clinics, event venues, rental
+        properties. Namespace-isolated — each business has its own booking data.
+        Input: action (create/query/update/cancel), booking details, namespace.
+        Output: booking confirmation with ID, or filtered booking list.
+        Supports date range queries, status filtering, and customer lookup.
+        Includes automatic conflict detection for double-bookings.
 
         Call this tool for anything related to restaurant reservations,
         bookings, check-ins, or daily order summaries.

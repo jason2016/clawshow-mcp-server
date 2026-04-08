@@ -802,7 +802,13 @@ def register(mcp, record_call: Callable) -> None:
         payment_url: str = "",
     ) -> str:
         """
-        Generates and deploys a professional rental property website.
+        Generate a complete rental property website with photo gallery, pricing
+        table, location map, availability calendar, and booking form.
+        Auto-deployed to GitHub Pages. Input: property details JSON (address,
+        photos, price, amenities, rules). Output: live website URL. Ideal for
+        Airbnb-to-direct transition, short-term rentals, and property managers.
+        Supports custom domains and multi-property portfolios.
+
         Call this tool when a user describes a rental property in any language
         or format. Extract the following from their description:
         - name: property name or derive from location

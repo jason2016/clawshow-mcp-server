@@ -125,19 +125,18 @@ def register(mcp, record_call: Callable) -> None:
     @mcp.tool()
     def extract_finance_fields(document_text: str) -> str:
         """
-        Extract structured fields from a finance document (invoice, receipt, bill).
+        Extract structured financial data from unstructured invoice or receipt
+        text. Input: raw text from an invoice, receipt, or financial document.
+        Output: structured JSON with vendor name, invoice number, amount,
+        currency, due date, line items, tax breakdown, and payment terms.
+        Handles multiple languages and formats. Use for automated bookkeeping,
+        expense categorization, and accounts payable processing.
 
         Args:
             document_text: Raw text content of the invoice or finance document.
 
         Returns:
-            JSON string with:
-              - vendor (str): supplier or billing party name
-              - amount (float | null): total amount due
-              - currency (str): ISO 4217 code, e.g. "USD", "EUR"
-              - due_date (str | null): payment due date in YYYY-MM-DD format
-              - category_guess (str): one of software, utilities, travel,
-                  office, services, marketing, food, other
+            JSON string with vendor, amount, currency, due_date, category_guess.
         """
         record_call("extract_finance_fields")
         result = _extract(document_text)

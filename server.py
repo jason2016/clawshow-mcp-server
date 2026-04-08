@@ -97,7 +97,6 @@ def _record_call(tool_name: str, meta: dict | None = None) -> None:
 
 from tools.rental_website import register as _register_rental_website
 from tools.finance_extract import register as _register_finance_extract
-from tools.stripe_payment import register as _register_stripe_payment
 from tools.notification import register as _register_notification
 from tools.orders import register as _register_orders
 from tools.business_page import register as _register_business_page
@@ -105,10 +104,10 @@ from tools.inventory import register as _register_inventory
 from tools.report import register as _register_report
 from tools.bookings import register as _register_bookings
 from tools.payment import register as _register_payment
+from tools.esign import register as _register_esign
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
-_register_stripe_payment(mcp, _record_call)
 _register_notification(mcp, _record_call)
 _register_orders(mcp, _record_call)
 _register_business_page(mcp, _record_call)
@@ -116,6 +115,7 @@ _register_inventory(mcp, _record_call)
 _register_report(mcp, _record_call)
 _register_bookings(mcp, _record_call)
 _register_payment(mcp, _record_call)
+_register_esign(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint
@@ -564,6 +564,280 @@ async def api_order_confirm_payment(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# eSign endpoints
+# ---------------------------------------------------------------------------
+
+ESIGN_DATA_DIR = Path("/opt/clawshow-data/esign")
+MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "https://mcp.clawshow.ai")
+
+_ESIGN_SIGNING_PAGE = """<!DOCTYPE html>
+<html lang="{lang}">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>{title}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:Arial,sans-serif;background:#f5f5f5;color:#333}}
+.header{{background:#1a1a2e;color:white;padding:16px 20px;text-align:center}}
+.header h1{{font-size:18px;font-weight:600}}
+.container{{max-width:700px;margin:20px auto;padding:0 16px}}
+.card{{background:white;border-radius:12px;padding:24px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08)}}
+.pdf-frame{{width:100%;height:500px;border:1px solid #ddd;border-radius:8px}}
+.sign-area h2{{font-size:16px;margin-bottom:12px;color:#555}}
+canvas{{border:2px dashed #ccc;border-radius:8px;width:100%;cursor:crosshair;touch-action:none;display:block}}
+.btn-row{{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}}
+.btn{{padding:10px 22px;border:none;border-radius:8px;font-size:15px;cursor:pointer;font-weight:600}}
+.btn-clear{{background:#f0f0f0;color:#555}}
+.btn-submit{{background:#1a1a2e;color:white;flex:1}}
+.btn-submit:disabled{{opacity:.5;cursor:not-allowed}}
+.status{{text-align:center;padding:20px;font-size:16px}}
+.status.success{{color:#27ae60}}
+.status.error{{color:#e74c3c}}
+.meta{{font-size:12px;color:#999;margin-top:8px}}
+</style>
+</head>
+<body>
+<div class="header"><h1>ClawShow eSign</h1></div>
+<div class="container">
+  <div class="card">
+    <p style="font-size:14px;color:#666;margin-bottom:12px">{greeting} <b>{signer_name}</b> — {doc_label}</p>
+    <iframe class="pdf-frame" src="{preview_url}"></iframe>
+  </div>
+  <div class="card sign-area" id="sign-card">
+    <h2>{sign_label}</h2>
+    <canvas id="pad" height="180"></canvas>
+    <p class="meta">{meta_label}</p>
+    <div class="btn-row">
+      <button class="btn btn-clear" onclick="clearPad()">{clear_label}</button>
+      <button class="btn btn-submit" id="submitBtn" onclick="submit()">{submit_label}</button>
+    </div>
+  </div>
+  <div id="result"></div>
+</div>
+<script>
+const docId = "{doc_id}";
+const canvas = document.getElementById("pad");
+const ctx = canvas.getContext("2d");
+let drawing = false, hasDrawn = false;
+
+function resize() {{
+  const w = canvas.offsetWidth;
+  canvas.width = w; canvas.height = 180;
+  ctx.strokeStyle = "#1a1a2e"; ctx.lineWidth = 2.5;
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+}}
+resize(); window.addEventListener("resize", resize);
+
+function pos(e) {{
+  const r = canvas.getBoundingClientRect(), sc = canvas.width / r.width;
+  const src = e.touches ? e.touches[0] : e;
+  return [(src.clientX - r.left) * sc, (src.clientY - r.top) * sc];
+}}
+canvas.addEventListener("mousedown", e => {{ drawing=true; ctx.beginPath(); const [x,y]=pos(e); ctx.moveTo(x,y); }});
+canvas.addEventListener("mousemove", e => {{ if(!drawing) return; const [x,y]=pos(e); ctx.lineTo(x,y); ctx.stroke(); hasDrawn=true; }});
+canvas.addEventListener("mouseup", ()=>drawing=false);
+canvas.addEventListener("touchstart", e=>{{ e.preventDefault(); drawing=true; ctx.beginPath(); const [x,y]=pos(e); ctx.moveTo(x,y); }}, {{passive:false}});
+canvas.addEventListener("touchmove", e=>{{ e.preventDefault(); if(!drawing) return; const [x,y]=pos(e); ctx.lineTo(x,y); ctx.stroke(); hasDrawn=true; }}, {{passive:false}});
+canvas.addEventListener("touchend", ()=>drawing=false);
+
+function clearPad() {{ ctx.clearRect(0,0,canvas.width,canvas.height); hasDrawn=false; }}
+
+async function submit() {{
+  if(!hasDrawn) {{ alert("{empty_warn}"); return; }}
+  const btn = document.getElementById("submitBtn");
+  btn.disabled = true; btn.textContent = "{sending_label}";
+  const png = canvas.toDataURL("image/png");
+  try {{
+    const r = await fetch("/esign/" + docId + "/sign", {{
+      method: "POST",
+      headers: {{"Content-Type": "application/json"}},
+      body: JSON.stringify({{signature_png: png}})
+    }});
+    const data = await r.json();
+    if(data.success) {{
+      document.getElementById("sign-card").style.display="none";
+      document.getElementById("result").innerHTML =
+        '<div class="card status success"><p style="font-size:22px">✓</p><p style="margin-top:8px;font-weight:600">{success_msg}</p><p style="margin-top:6px;font-size:13px;color:#666">{signed_pdf_msg}: <a href="'+data.signed_pdf_url+'" target="_blank">{download_label}</a></p></div>';
+    }} else {{
+      btn.disabled=false; btn.textContent="{submit_label}";
+      document.getElementById("result").innerHTML = '<div class="card status error">' + (data.error||"Error") + '</div>';
+    }}
+  }} catch(e) {{
+    btn.disabled=false; btn.textContent="{submit_label}";
+    document.getElementById("result").innerHTML = '<div class="card status error">Network error</div>';
+  }}
+}}
+</script>
+</body>
+</html>"""
+
+_ESIGN_LABELS = {
+    "fr": {
+        "title": "Signer le document",
+        "greeting": "Bonjour",
+        "doc_label": "Veuillez lire et signer le document ci-dessous.",
+        "sign_label": "Votre signature",
+        "meta_label": "Signez avec votre doigt (mobile) ou votre souris.",
+        "clear_label": "Effacer",
+        "submit_label": "Confirmer la signature",
+        "sending_label": "Envoi en cours...",
+        "empty_warn": "Veuillez signer avant de confirmer.",
+        "success_msg": "Document signé avec succès !",
+        "signed_pdf_msg": "Télécharger le document signé",
+        "download_label": "Télécharger",
+    },
+    "en": {
+        "title": "Sign Document",
+        "greeting": "Hello",
+        "doc_label": "Please read and sign the document below.",
+        "sign_label": "Your signature",
+        "meta_label": "Sign with your finger (mobile) or mouse.",
+        "clear_label": "Clear",
+        "submit_label": "Confirm signature",
+        "sending_label": "Submitting...",
+        "empty_warn": "Please sign before confirming.",
+        "success_msg": "Document signed successfully!",
+        "signed_pdf_msg": "Download signed document",
+        "download_label": "Download",
+    },
+    "zh": {
+        "title": "签署文件",
+        "greeting": "您好",
+        "doc_label": "请阅读以下文件并签名。",
+        "sign_label": "您的签名",
+        "meta_label": "请用手指（手机）或鼠标签名。",
+        "clear_label": "清除",
+        "submit_label": "确认签名",
+        "sending_label": "提交中...",
+        "empty_warn": "请先签名再确认。",
+        "success_msg": "文件签署成功！",
+        "signed_pdf_msg": "下载已签署文件",
+        "download_label": "下载",
+    },
+}
+
+
+async def esign_signing_page(request: Request):
+    """GET /esign/{document_id} — serve the signing page."""
+    from starlette.responses import HTMLResponse
+    doc_id = request.path_params["document_id"]
+    doc = db.get_esign_document(doc_id)
+    if not doc:
+        return HTMLResponse("<h2>Document not found or link expired.</h2>", status_code=404)
+    if doc["status"] == "completed":
+        return HTMLResponse("<h2>This document has already been signed. Thank you.</h2>")
+
+    lang = doc.get("language", "fr")
+    labels = _ESIGN_LABELS.get(lang, _ESIGN_LABELS["en"])
+    preview_url = f"{MCP_BASE_URL}/esign/{doc_id}/preview.pdf"
+
+    html = _ESIGN_SIGNING_PAGE.format(
+        lang=lang,
+        doc_id=doc_id,
+        signer_name=doc["signer_name"],
+        preview_url=preview_url,
+        **labels,
+    )
+    return HTMLResponse(html)
+
+
+async def esign_preview_pdf(request: Request):
+    """GET /esign/{document_id}/preview.pdf — serve the unsigned PDF."""
+    from starlette.responses import FileResponse
+    doc_id = request.path_params["document_id"]
+    doc = db.get_esign_document(doc_id)
+    if not doc:
+        return JSONResponse({"error": "Document not found"}, status_code=404)
+    pdf_path = doc.get("original_pdf_path", "")
+    if not pdf_path or not Path(pdf_path).exists():
+        return JSONResponse({"error": "PDF not found"}, status_code=404)
+    return FileResponse(pdf_path, media_type="application/pdf")
+
+
+async def esign_signed_pdf(request: Request):
+    """GET /esign/{document_id}/signed.pdf — serve the signed PDF."""
+    from starlette.responses import FileResponse
+    doc_id = request.path_params["document_id"]
+    doc = db.get_esign_document(doc_id)
+    if not doc or not doc.get("signed_pdf_path"):
+        return JSONResponse({"error": "Signed document not found"}, status_code=404)
+    path = doc["signed_pdf_path"]
+    if not Path(path).exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return FileResponse(path, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{doc_id}-signed.pdf"'})
+
+
+async def esign_submit_signature(request: Request) -> JSONResponse:
+    """POST /esign/{document_id}/sign — receive signature PNG, embed in PDF."""
+    import base64 as _b64
+    doc_id = request.path_params["document_id"]
+    doc = db.get_esign_document(doc_id)
+    if not doc:
+        return JSONResponse({"error": "Document not found"}, status_code=404)
+    if doc["status"] == "completed":
+        return JSONResponse({"error": "Already signed"}, status_code=409)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    sig_data_url = body.get("signature_png", "")
+    if not sig_data_url or not sig_data_url.startswith("data:image/png;base64,"):
+        return JSONResponse({"error": "Missing or invalid signature_png"}, status_code=400)
+
+    sig_bytes = _b64.b64decode(sig_data_url.split(",", 1)[1])
+    signer_ip = request.client.host if request.client else "unknown"
+    signed_at = datetime.now(timezone.utc).isoformat()
+
+    original_pdf = doc.get("original_pdf_path", "")
+    if not original_pdf or not Path(original_pdf).exists():
+        return JSONResponse({"error": "Original PDF not found"}, status_code=500)
+
+    namespace = doc["namespace"]
+    signed_pdf = str(ESIGN_DATA_DIR / namespace / f"{doc_id}-signed.pdf")
+
+    try:
+        from tools.esign import _embed_signature_in_pdf
+        _embed_signature_in_pdf(original_pdf, signed_pdf, sig_bytes,
+                                 doc["signer_name"], signed_at, signer_ip)
+    except Exception as e:
+        return JSONResponse({"error": f"PDF signing failed: {e}"}, status_code=500)
+
+    db.complete_esign_document(doc_id, signed_pdf, signer_ip)
+
+    signed_pdf_url = f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf"
+
+    # Fire callback webhook if configured
+    callback_url = doc.get("callback_url", "")
+    if callback_url:
+        def _fire_callback():
+            try:
+                import requests as _r
+                _r.post(callback_url, json={
+                    "event": "esign.completed",
+                    "document_id": doc_id,
+                    "reference_id": doc.get("reference_id", ""),
+                    "signed_pdf_url": signed_pdf_url,
+                    "signed_at": signed_at,
+                    "signer_name": doc["signer_name"],
+                    "signer_ip": signer_ip,
+                }, timeout=10)
+            except Exception:
+                pass
+        threading.Thread(target=_fire_callback, daemon=True).start()
+
+    return JSONResponse({
+        "success": True,
+        "document_id": doc_id,
+        "signed_pdf_url": signed_pdf_url,
+        "signed_at": signed_at,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
 
@@ -586,6 +860,10 @@ def _build_app() -> Starlette:
             Route("/api/order/{id:int}/picked", api_order_picked, methods=["PATCH"]),
             Route("/api/payment/create", api_payment_create, methods=["POST"]),
             Route("/api/payment/verify", api_payment_verify, methods=["GET"]),
+            Route("/esign/{document_id}/sign", esign_submit_signature, methods=["POST"]),
+            Route("/esign/{document_id}/preview.pdf", esign_preview_pdf, methods=["GET"]),
+            Route("/esign/{document_id}/signed.pdf", esign_signed_pdf, methods=["GET"]),
+            Route("/esign/{document_id}", esign_signing_page, methods=["GET"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[

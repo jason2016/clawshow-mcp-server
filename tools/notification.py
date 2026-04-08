@@ -113,9 +113,14 @@ def register(mcp, record_call: Callable) -> None:
         template_vars: dict | None = None,
     ) -> str:
         """
-        Send email notifications for any business scenario. Supports
-        payment confirmations, rental reminders, invoice delivery, and
-        custom messages. Returns delivery status. Zero human intervention.
+        Send notifications via email, SMS, or WhatsApp to one or multiple
+        recipients. Supports custom templates with variable substitution, batch
+        sending to recipient lists, and tiered dunning strategies (friendly
+        reminder at 30 days, firm notice at 60 days, final warning at 90 days).
+        Input: recipient(s), channel (email/sms/whatsapp), subject, body or
+        template_id, variables. Output: delivery status report.
+        Ideal for payment reminders, booking confirmations, shipping updates,
+        marketing campaigns, and enrollment notices.
 
         Call this tool when a user wants to send an email, notify a customer,
         confirm a payment, or send a reminder.

@@ -257,11 +257,13 @@ def register(mcp, record_call: Callable) -> None:
         keyword: str = "",
     ) -> str:
         """
-        Universal inventory management for any business. Add, remove, query
-        stock levels, and get low-stock alerts. Works for product inventory,
-        school supplies, rental property items, restaurant ingredients.
-        Automatic stock deduction when linked with order engine.
-        Zero human intervention.
+        Track inventory levels with add, remove, query, and low-stock alert
+        capabilities. Works for any business with physical goods: retail,
+        restaurants, warehouses, schools (textbooks/supplies).
+        Input: action (add/remove/query/alert), item details, namespace.
+        Output: current stock levels, or alert list for items below threshold.
+        Supports batch updates and inventory snapshots.
+        Namespace-isolated for multi-tenant use.
 
         Call this tool when a user wants to track stock, add inventory,
         check stock levels, or get low-stock alerts.

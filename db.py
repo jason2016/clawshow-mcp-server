@@ -105,6 +105,29 @@ def init_tables():
             CREATE INDEX IF NOT EXISTS idx_orders_ns_status ON orders(namespace, status);
             CREATE INDEX IF NOT EXISTS idx_dine_orders_ns_status ON dine_orders(namespace, status);
             CREATE INDEX IF NOT EXISTS idx_dine_orders_ns_date ON dine_orders(namespace, created_at);
+
+            CREATE TABLE IF NOT EXISTS esign_documents (
+                id               TEXT PRIMARY KEY,
+                namespace        TEXT NOT NULL,
+                template         TEXT NOT NULL,
+                reference_id     TEXT,
+                signer_name      TEXT NOT NULL,
+                signer_email     TEXT NOT NULL,
+                fields           TEXT DEFAULT '{}',
+                status           TEXT DEFAULT 'pending',
+                signing_url      TEXT,
+                original_pdf_path TEXT,
+                signed_pdf_path  TEXT,
+                callback_url     TEXT,
+                signer_ip        TEXT,
+                signed_at        TEXT,
+                language         TEXT DEFAULT 'fr',
+                send_email       INTEGER DEFAULT 1,
+                created_at       TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_esign_ns ON esign_documents(namespace);
+            CREATE INDEX IF NOT EXISTS idx_esign_ref ON esign_documents(reference_id);
         """)
         # Migration: add booking_code column if missing (for existing DBs)
         try:
@@ -469,6 +492,56 @@ def query_dine_orders_history(namespace: str, date: str = "", status: str = "", 
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_dict(r) for r in rows]
+
+# ---------------------------------------------------------------------------
+# eSign CRUD
+# ---------------------------------------------------------------------------
+
+def create_esign_document(doc_id: str, namespace: str, template: str, signer_name: str,
+                           signer_email: str, fields: dict, signing_url: str,
+                           original_pdf_path: str, reference_id: str = "",
+                           callback_url: str = "", language: str = "fr",
+                           send_email: bool = True) -> dict:
+    ensure_namespace(namespace)
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO esign_documents
+               (id, namespace, template, reference_id, signer_name, signer_email,
+                fields, status, signing_url, original_pdf_path, callback_url,
+                language, send_email)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+            (doc_id, namespace, template, reference_id, signer_name, signer_email,
+             json.dumps(fields, ensure_ascii=False), signing_url, original_pdf_path,
+             callback_url, language, int(send_email)),
+        )
+    return {"success": True, "document_id": doc_id}
+
+
+def get_esign_document(doc_id: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM esign_documents WHERE id = ?", (doc_id,)).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if isinstance(d.get("fields"), str):
+        try:
+            d["fields"] = json.loads(d["fields"])
+        except Exception:
+            pass
+    return d
+
+
+def complete_esign_document(doc_id: str, signed_pdf_path: str, signer_ip: str) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE esign_documents SET status='completed', signed_pdf_path=?, signer_ip=?, signed_at=? WHERE id=?",
+            (signed_pdf_path, signer_ip, now, doc_id),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Document {doc_id} not found"}
+    return {"success": True, "document_id": doc_id, "signed_at": now}
+
 
 def confirm_dine_order_payment(namespace: str, order_id: int, payment_method: str, amount_received: float) -> dict:
     """Admin confirms counter payment (card or cash). Marks order as paid."""

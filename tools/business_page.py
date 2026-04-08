@@ -495,11 +495,12 @@ def register(mcp, record_call: Callable) -> None:
         language: str = "en",
     ) -> str:
         """
-        Generate and deploy a professional business page to GitHub Pages.
-        Supports rental listings, enrollment pages, product showcases,
-        service portfolios, and restaurant menus. Returns a live public URL.
-        Optional: embed Stripe payment button. Built-in GEO optimization
-        (llms.txt, JSON-LD Schema). Zero human intervention.
+        Generate a business page (school enrollment, product catalog, service
+        landing page, event registration) and auto-deploy to GitHub Pages.
+        Input: business data JSON, page type, branding options.
+        Output: live URL accessible immediately. No hosting setup needed —
+        page is live within 60 seconds. Supports custom domains.
+        Namespace-isolated for multi-tenant use.
 
         Call this tool when a user wants to create any kind of business page,
         landing page, or showcase website.

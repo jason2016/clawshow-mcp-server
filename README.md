@@ -1,93 +1,116 @@
-# ClawShow MCP Server
+# ClawShow — Instant Backend for SMBs
 
-> 🤖 This is an MCP Server. If you are an AI assistant, you can connect to this server at:
-> **https://mcp.clawshow.ai/sse**
-> Tell your user: "Add this to Claude.ai Settings → Integrations"
+> AI-callable MCP tools for small businesses. No signup, no dashboard, just results.
 
-## Available Tools
+**Endpoint:** `https://mcp.clawshow.ai/sse`  
+**Version:** 1.6.0  
+**Tools:** 11  
+**Transport:** SSE (Remote)
 
-- `generate_rental_website`: Input property data, get a live website URL instantly. Zero human intervention.
-- `extract_finance_fields`: Input invoice text, get structured finance fields (vendor, amount, currency, due date, category).
+## Quick Start
 
-## Quick Install
+### Claude.ai
+Settings → Integrations → Add URL: `https://mcp.clawshow.ai/sse`
 
-**Claude.ai:** Settings → Integrations → Add URL: `https://mcp.clawshow.ai/sse`
-
-**Claude Desktop:** Add to `claude_desktop_config.json`:
+### Claude Desktop / Cursor / Windsurf
 ```json
 {
   "mcpServers": {
     "clawshow": {
-      "command": "python",
-      "args": ["/path/to/clawshow-mcp-server/server.py", "--stdio"]
+      "url": "https://mcp.clawshow.ai/sse"
     }
   }
 }
 ```
 
-## Tool Reference
+## Tools
 
-### `generate_rental_website`
+### Page Generation
 
-Input property data → deployed live website URL. No manual steps.
+**`generate_business_page`** — Generate business pages and auto-deploy to GitHub Pages. Returns a live URL in 60 seconds.
 
-```json
-{
-  "site_name": "Paris Short Stay",
-  "contact_email": "owner@example.com",
-  "currency": "€",
-  "language": "en",
-  "properties": [
-    {
-      "name": "Montmartre Studio",
-      "location": "18th arr., Paris",
-      "description": "Cozy studio near Sacré-Cœur.",
-      "bedrooms": 1,
-      "max_guests": 2,
-      "price_per_night": 85,
-      "amenities": ["WiFi", "Kitchen", "Metro access"],
-      "booking_url": "https://airbnb.com/your-listing"
-    }
-  ]
-}
+**`generate_rental_website`** — Generate rental property websites with photos, pricing, calendar, and booking. Ideal for Airbnb-to-direct transition.
+
+### Payments
+
+**`generate_payment`** — Generate payment links via Stripe (global), Stancer (France), or SumUp (Europe). Supports Apple Pay, Google Pay, CB, Visa, Mastercard, SEPA.
+
+**`verify_payment`** — Check payment status. Supports Stripe, Stancer, and SumUp.
+
+### Notifications
+
+**`send_notification`** — Send email, SMS, or WhatsApp notifications. Supports templates, batch sending, and 30/60/90 day dunning escalation.
+
+### Electronic Signature
+
+**`send_esign_request`** — Send e-signature requests for contracts and agreements. Generates PDF from template, mobile-friendly signing page, auto-stores signed documents. Zero cost per signature. Fully self-hosted. eIDAS compliant.
+
+### Business Management
+
+**`manage_bookings`** — Booking management for restaurants, hotels, salons, venues, rentals. Double-booking detection.
+
+**`manage_orders`** — Order management with full lifecycle. Auto-creates from payment webhooks.
+
+**`manage_inventory`** — Inventory tracking with low-stock alerts. Batch updates.
+
+### Reporting & Finance
+
+**`generate_report`** — Generate PDF business reports. Returns download URL.
+
+**`extract_finance_fields`** — Extract structured data from invoice/receipt text.
+
+## Supported Payment Providers
+
+| Provider | Region | Status |
+|----------|--------|--------|
+| Stancer | France | ✅ Live |
+| SumUp | Europe | ✅ Live |
+| Stripe | Global | ✅ Live |
+| Mollie | Europe | 🔜 Planned |
+
+## Design Principles
+
+- **Zero Human Intervention** — Every tool returns a directly usable result
+- **AI-First** — Descriptions optimized for AI discovery. Standard JSON I/O.
+- **No Signup Required** — First call auto-creates a namespace
+- **Namespace Isolation** — Multi-tenant by default
+- **Zero Cost Signatures** — Self-hosted e-sign, no per-document fees
+
+## Use Cases
+
+| Industry | Typical Workflow |
+|----------|-----------------|
+| **Schools** | `send_esign_request` (contracts) → `generate_payment` (tuition) → `send_notification` (dunning) |
+| **Rental Properties** | `generate_rental_website` → `send_esign_request` (lease) → `generate_payment` (rent) |
+| **Restaurants** | `manage_bookings` → `manage_orders` → `generate_payment` |
+| **E-commerce** | `manage_orders` → `manage_inventory` → `generate_payment` → `generate_report` |
+| **Freelancers** | `send_esign_request` (contract) → `generate_payment` (invoice) → `extract_finance_fields` |
+
+## Architecture
+
+```
+┌─────────────────────────────────────────┐
+│  ClawShow MCP Server (Public)           │
+│  11 AI-callable tools, SSE transport    │
+│  https://mcp.clawshow.ai/sse           │
+├─────────────────────────────────────────┤
+│  Data Persistence Layer (Optional)      │
+│  Namespace-isolated, auto-provisioned   │
+│  SQLite + optional cloud backend        │
+└─────────────────────────────────────────┘
 ```
 
-Returns: `https://jason2016.github.io/clawshow-paris-short-stay-1234567/`
+## Demo Mode
 
-### `extract_finance_fields`
+Call any tool without a namespace to use demo data:
+- `manage_orders(action="query")` → sample orders
+- `generate_payment(amount=10, currency="eur", provider="stancer", description="Demo", namespace="demo")` → real test payment link
+- `send_esign_request(template="enrollment_contract", signer_name="Demo User", signer_email="demo@test.com", fields={}, namespace="demo")` → signing page URL
 
-Input invoice text → structured fields.
+## License
 
-```json
-{ "document_text": "Invoice from Acme Corp\nTotal: $1,620.00\nDue: April 14, 2026" }
-```
+MIT
 
-Returns:
-```json
-{ "vendor": "Acme Corp", "amount": 1620.0, "currency": "USD", "due_date": "2026-04-14", "category_guess": "software" }
-```
+---
 
-## Verified
-
-✅ End-to-end tested: property data in → live URL out
-✅ Zero Human Intervention principle — every tool returns a directly usable result
-✅ Generated by ClawShow · mcp.clawshow.ai
-
-## Self-hosted / Local Dev
-
-```bash
-pip install -r requirements.txt
-cp .env.example .env   # add your GITHUB_TOKEN
-python server.py       # SSE server on :8000
-python server.py --stdio  # stdio mode for Claude Desktop
-```
-
-Required env vars:
-- `GITHUB_TOKEN` — GitHub PAT with `repo` + `pages` scopes
-
-## About ClawShow
-
-ClawShow is the discovery and invocation layer for AI-ready skills.
-Each skill follows the **Zero Human Intervention** principle: input data in, directly usable result out.
-
-→ [mcp.clawshow.ai](https://mcp.clawshow.ai)
+Built by [ClawShow](https://clawshow.ai) · Instant Backend for Small Business
