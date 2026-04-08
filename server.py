@@ -104,6 +104,7 @@ from tools.business_page import register as _register_business_page
 from tools.inventory import register as _register_inventory
 from tools.report import register as _register_report
 from tools.bookings import register as _register_bookings
+from tools.payment import register as _register_payment
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
@@ -114,6 +115,7 @@ _register_business_page(mcp, _record_call)
 _register_inventory(mcp, _record_call)
 _register_report(mcp, _record_call)
 _register_bookings(mcp, _record_call)
+_register_payment(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint
@@ -378,6 +380,61 @@ async def api_booking_summary(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Dine-in order API endpoints
+# ---------------------------------------------------------------------------
+
+async def api_create_dine_order(request: Request) -> JSONResponse:
+    """POST /api/order/create — create a dine-in order."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    result = db.create_dine_order(namespace, data)
+    return JSONResponse(result, status_code=201 if result.get("success") else 400)
+
+
+async def api_order_queue(request: Request) -> JSONResponse:
+    """GET /api/order/queue?namespace=x — get today's dine-in orders for kitchen."""
+    namespace = request.query_params.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    status = request.query_params.get("status", "")
+    orders = db.query_dine_orders(namespace, status=status)
+    return JSONResponse({"orders": orders, "total": len(orders)})
+
+
+async def api_order_complete(request: Request) -> JSONResponse:
+    """PATCH /api/order/{id}/complete — mark order as ready for pickup."""
+    order_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    result = db.update_dine_order_status(namespace, order_id, "ready")
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
+async def api_order_picked(request: Request) -> JSONResponse:
+    """PATCH /api/order/{id}/picked — mark order as picked up."""
+    order_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    result = db.update_dine_order_status(namespace, order_id, "picked")
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
+# ---------------------------------------------------------------------------
 # Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
 
@@ -392,6 +449,10 @@ def _build_app() -> Starlette:
             Route("/api/booking/{id:int}", api_update_booking, methods=["PATCH"]),
             Route("/api/bookings", api_query_bookings, methods=["GET"]),
             Route("/api/bookings/summary", api_booking_summary, methods=["GET"]),
+            Route("/api/order/create", api_create_dine_order, methods=["POST"]),
+            Route("/api/order/queue", api_order_queue, methods=["GET"]),
+            Route("/api/order/{id:int}/complete", api_order_complete, methods=["PATCH"]),
+            Route("/api/order/{id:int}/picked", api_order_picked, methods=["PATCH"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[

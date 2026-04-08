@@ -86,8 +86,25 @@ def init_tables():
                 FOREIGN KEY (namespace) REFERENCES namespaces(namespace)
             );
 
+            CREATE TABLE IF NOT EXISTS dine_orders (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace        TEXT NOT NULL,
+                order_number     TEXT NOT NULL,
+                order_type       TEXT DEFAULT 'dine_in',
+                items            TEXT DEFAULT '[]',
+                total_amount     REAL DEFAULT 0,
+                status           TEXT DEFAULT 'pending',
+                payment_status   TEXT DEFAULT 'unpaid',
+                payment_method   TEXT DEFAULT '',
+                created_at       TEXT DEFAULT (datetime('now')),
+                updated_at       TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (namespace) REFERENCES namespaces(namespace)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_bookings_ns_date ON bookings(namespace, booking_date);
             CREATE INDEX IF NOT EXISTS idx_orders_ns_status ON orders(namespace, status);
+            CREATE INDEX IF NOT EXISTS idx_dine_orders_ns_status ON dine_orders(namespace, status);
+            CREATE INDEX IF NOT EXISTS idx_dine_orders_ns_date ON dine_orders(namespace, created_at);
         """)
         # Migration: add booking_code column if missing (for existing DBs)
         try:
@@ -324,6 +341,71 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         except Exception:
             pass
     return d
+
+
+# ---------------------------------------------------------------------------
+# Dine-in order CRUD
+# ---------------------------------------------------------------------------
+
+def _next_dine_order_number(conn, namespace: str) -> str:
+    """Generate C001-style order number, resets daily."""
+    today = date.today().isoformat()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM dine_orders WHERE namespace = ? AND created_at >= ?",
+        (namespace, today),
+    ).fetchone()
+    nxt = (row["cnt"] or 0) + 1
+    return f"C{nxt:03d}"
+
+
+def create_dine_order(namespace: str, data: dict) -> dict:
+    ensure_namespace(namespace, business_type="restaurant")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    items_json = json.dumps(data.get("items", []), ensure_ascii=False)
+    order_type = data.get("order_type", "dine_in")
+
+    with get_conn() as conn:
+        order_number = _next_dine_order_number(conn, namespace)
+        cur = conn.execute(
+            """INSERT INTO dine_orders (namespace, order_number, order_type, items,
+               total_amount, status, payment_status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?)""",
+            (namespace, order_number, order_type, items_json,
+             data.get("total_amount", 0), now, now),
+        )
+        order_id = cur.lastrowid
+
+    return {"success": True, "order_id": order_id, "order_number": order_number, "namespace": namespace}
+
+
+def query_dine_orders(namespace: str, status: str = "", limit: int = 100) -> list[dict]:
+    today = date.today().isoformat()
+    sql = "SELECT * FROM dine_orders WHERE namespace = ? AND created_at >= ?"
+    params: list = [namespace, today]
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY created_at ASC LIMIT ?"
+    params.append(limit)
+
+    with get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+
+def update_dine_order_status(namespace: str, order_id: int, status: str) -> dict:
+    valid = ("pending", "preparing", "ready", "picked")
+    if status not in valid:
+        return {"success": False, "error": f"Invalid status. Must be one of: {', '.join(valid)}"}
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE dine_orders SET status = ?, updated_at = ? WHERE id = ? AND namespace = ?",
+            (status, now, order_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Order {order_id} not found"}
+    return {"success": True, "order_id": order_id, "status": status}
 
 
 # Auto-init on import
