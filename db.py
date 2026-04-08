@@ -363,15 +363,23 @@ def create_dine_order(namespace: str, data: dict) -> dict:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     items_json = json.dumps(data.get("items", []), ensure_ascii=False)
     order_type = data.get("order_type", "dine_in")
+    payment_method = data.get("payment_method", "online")
+    # Determine initial payment_status based on payment method
+    if payment_method == "card_counter":
+        payment_status = "pending_counter"
+    elif payment_method == "cash":
+        payment_status = "pending_cash"
+    else:
+        payment_status = "unpaid"
 
     with get_conn() as conn:
         order_number = _next_dine_order_number(conn, namespace)
         cur = conn.execute(
             """INSERT INTO dine_orders (namespace, order_number, order_type, items,
-               total_amount, status, payment_status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 'pending', 'unpaid', ?, ?)""",
+               total_amount, status, payment_status, payment_method, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
             (namespace, order_number, order_type, items_json,
-             data.get("total_amount", 0), now, now),
+             data.get("total_amount", 0), payment_status, payment_method, now, now),
         )
         order_id = cur.lastrowid
 
@@ -410,3 +418,66 @@ def update_dine_order_status(namespace: str, order_id: int, status: str) -> dict
 
 # Auto-init on import
 init_tables()
+
+
+def update_dine_order_payment(namespace: str, order_id: int, payment_id: str, provider: str = "stancer") -> dict:
+    """Record payment_id and provider on a dine order."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        # Migrate: add payment_id column if missing
+        try:
+            conn.execute("SELECT payment_id FROM dine_orders LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE dine_orders ADD COLUMN payment_id TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE dine_orders ADD COLUMN payment_provider TEXT DEFAULT 'stancer'")
+        cur = conn.execute(
+            "UPDATE dine_orders SET payment_id = ?, payment_provider = ?, updated_at = ? WHERE id = ? AND namespace = ?",
+            (payment_id, provider, now, order_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Order {order_id} not found"}
+    return {"success": True, "order_id": order_id, "payment_id": payment_id}
+
+
+def update_dine_order_payment_status(namespace: str, order_id: int, payment_status: str) -> dict:
+    """Mark a dine order as paid (or other payment status)."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE dine_orders SET payment_status = ?, updated_at = ? WHERE id = ? AND namespace = ?",
+            (payment_status, now, order_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Order {order_id} not found"}
+    return {"success": True, "order_id": order_id, "payment_status": payment_status}
+
+def query_dine_orders_history(namespace: str, date: str = "", status: str = "", limit: int = 200) -> list[dict]:
+    """Return dine orders for a specific date (all statuses, including picked)."""
+    if not date:
+        date = __import__("datetime").date.today().isoformat()
+    # Match on the date part of created_at
+    sql = "SELECT * FROM dine_orders WHERE namespace = ? AND created_at >= ? AND created_at < ?"
+    params: list = [namespace, date, (
+        __import__("datetime").date.fromisoformat(date) +
+        __import__("datetime").timedelta(days=1)
+    ).isoformat()]
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with get_conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_dict(r) for r in rows]
+
+def confirm_dine_order_payment(namespace: str, order_id: int, payment_method: str, amount_received: float) -> dict:
+    """Admin confirms counter payment (card or cash). Marks order as paid."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE dine_orders SET payment_status = 'paid', payment_method = ?, updated_at = ? WHERE id = ? AND namespace = ?",
+            (payment_method, now, order_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Order {order_id} not found"}
+    return {"success": True, "order_id": order_id, "payment_status": "paid", "amount_received": amount_received}

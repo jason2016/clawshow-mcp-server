@@ -257,7 +257,12 @@ def _send_booking_email(data: dict, booking_code: str) -> None:
 
         items_html = ""
         for item in items:
-            items_html += f'<tr><td style="padding:6px 12px;border-bottom:1px solid #eee">{item.get("name","")}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;text-align:center">×{item.get("qty",1)}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;text-align:right">{item.get("price",0):.2f}€</td></tr>'
+            opts = item.get("options") or {}
+            opts_str = ", ".join(v for v in opts.values() if v) if opts else ""
+            name_cell = item.get("name", "")
+            if opts_str:
+                name_cell += f'<br><span style="font-size:12px;color:#888">{opts_str}</span>'
+            items_html += f'<tr><td style="padding:6px 12px;border-bottom:1px solid #eee">{name_cell}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;text-align:center">×{item.get("qty",1)}</td><td style="padding:6px 12px;border-bottom:1px solid #eee;text-align:right">{item.get("price",0):.2f}€</td></tr>'
 
         html = f"""
         <div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
@@ -434,6 +439,130 @@ async def api_order_picked(request: Request) -> JSONResponse:
     return JSONResponse(result, status_code=200 if result.get("success") else 400)
 
 
+import base64
+import requests as _req_lib
+import os as _os
+
+async def api_payment_create(request: Request) -> JSONResponse:
+    """POST /api/payment/create — create a Stancer payment for a dine order."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    amount = data.get("amount", 0)       # in cents
+    description = data.get("description", "Commande Neige Rouge")
+    order_id = data.get("order_id")
+    if not namespace or not amount or not order_id:
+        return JSONResponse({"error": "namespace, amount, order_id required"}, status_code=400)
+    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+    stancer_pub = _os.environ.get("STANCER_PUBLIC_KEY", "")
+    if not stancer_key or stancer_key.startswith("stest_your"):
+        return JSONResponse({"error": "Stancer not configured"}, status_code=500)
+    auth = base64.b64encode(f"{stancer_key}:".encode()).decode()
+    return_url = f"https://jason2016.github.io/neige-rouge/#payment-success?order_id={order_id}"
+    try:
+        resp = _req_lib.post(
+            "https://api.stancer.com/v2/payment_intents/",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json={"amount": int(amount), "currency": "eur", "description": description, "return_url": return_url},
+            timeout=15,
+        )
+        result = resp.json()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    if resp.status_code not in (200, 201):
+        return JSONResponse({"error": result.get("error", f"Stancer error {resp.status_code}")}, status_code=502)
+    payment_id = result.get("id", "")
+    payment_url = result.get("url", "")
+    if not payment_url:
+        return JSONResponse({"error": "No payment URL returned by Stancer"}, status_code=502)
+    db.update_dine_order_payment(namespace, int(order_id), payment_id, "stancer")
+    return JSONResponse({"success": True, "payment_id": payment_id, "payment_url": payment_url})
+
+
+async def api_payment_verify(request: Request) -> JSONResponse:
+    """GET /api/payment/verify?namespace=x&order_id=y — verify Stancer payment for an order."""
+    namespace = request.query_params.get("namespace", "")
+    order_id_str = request.query_params.get("order_id", "")
+    if not namespace or not order_id_str:
+        return JSONResponse({"error": "namespace and order_id required"}, status_code=400)
+
+    # Look up payment_id from DB
+    import sqlite3 as _sqlite3
+    with db.get_conn() as _conn:
+        row = _conn.execute(
+            "SELECT payment_id, payment_status FROM dine_orders WHERE id = ? AND namespace = ?",
+            (int(order_id_str), namespace)
+        ).fetchone()
+    if not row:
+        return JSONResponse({"error": "Order not found"}, status_code=404)
+
+    # Already marked paid — return immediately
+    if row["payment_status"] == "paid":
+        return JSONResponse({"success": True, "paid": True, "status": "captured"})
+
+    payment_id = row["payment_id"]
+    if not payment_id:
+        return JSONResponse({"success": True, "paid": False, "status": "no_payment_id"})
+
+    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+    if not stancer_key or stancer_key.startswith("stest_your"):
+        return JSONResponse({"error": "Stancer not configured"}, status_code=500)
+    auth = base64.b64encode(f"{stancer_key}:".encode()).decode()
+
+    import time as _time
+    for attempt in range(3):
+        try:
+            resp = _req_lib.get(
+                f"https://api.stancer.com/v2/payment_intents/{payment_id}",
+                headers={"Authorization": f"Basic {auth}"},
+                timeout=15,
+            )
+            result = resp.json()
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+        status = result.get("status", "")
+        paid = status in ("succeeded", "requires_capture", "paid", "captured", "to_capture", "authorized")
+        if paid:
+            try:
+                db.update_dine_order_payment_status(namespace, int(order_id_str), "paid")
+            except Exception:
+                pass
+            return JSONResponse({"success": True, "paid": True, "status": status, "payment_id": payment_id})
+        # Non-final status — wait and retry
+        if attempt < 2:
+            _time.sleep(2)
+
+    return JSONResponse({"success": True, "paid": False, "status": status, "payment_id": payment_id})
+
+async def api_order_history(request: Request) -> JSONResponse:
+    """GET /api/order/history?namespace=x&date=YYYY-MM-DD&status= — all dine orders for a date."""
+    namespace = request.query_params.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    date = request.query_params.get("date", "")
+    status = request.query_params.get("status", "")
+    orders = db.query_dine_orders_history(namespace, date=date, status=status)
+    return JSONResponse({"orders": orders, "total": len(orders)})
+
+
+async def api_order_confirm_payment(request: Request) -> JSONResponse:
+    """POST /api/order/{id}/confirm-payment — admin confirms counter payment."""
+    order_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    payment_method = data.get("payment_method", "card_counter")
+    amount_received = float(data.get("amount_received", 0))
+    result = db.confirm_dine_order_payment(namespace, order_id, payment_method, amount_received)
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
 # ---------------------------------------------------------------------------
 # Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
@@ -451,8 +580,12 @@ def _build_app() -> Starlette:
             Route("/api/bookings/summary", api_booking_summary, methods=["GET"]),
             Route("/api/order/create", api_create_dine_order, methods=["POST"]),
             Route("/api/order/queue", api_order_queue, methods=["GET"]),
+            Route("/api/order/history", api_order_history, methods=["GET"]),
             Route("/api/order/{id:int}/complete", api_order_complete, methods=["PATCH"]),
+            Route("/api/order/{id:int}/confirm-payment", api_order_confirm_payment, methods=["POST"]),
             Route("/api/order/{id:int}/picked", api_order_picked, methods=["PATCH"]),
+            Route("/api/payment/create", api_payment_create, methods=["POST"]),
+            Route("/api/payment/verify", api_payment_verify, methods=["GET"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
