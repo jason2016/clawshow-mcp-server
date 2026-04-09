@@ -555,6 +555,12 @@ def get_esign_document(doc_id: str) -> dict | None:
     return d
 
 
+def update_esign_s3_url(doc_id: str, s3_url: str) -> None:
+    """Persist S3 URL for the signed PDF."""
+    with get_conn() as conn:
+        conn.execute("UPDATE esign_documents SET s3_url=? WHERE id=?", (s3_url, doc_id))
+
+
 def complete_esign_document(doc_id: str, signed_pdf_path: str, signer_ip: str,
                               city: str = "", lu_approuve: str = "") -> dict:
     now = datetime.now(timezone.utc).isoformat()
@@ -659,6 +665,10 @@ def _ensure_esign_v2_schema():
         # Add V2 columns to esign_documents if missing
         try:
             conn.execute("ALTER TABLE esign_documents ADD COLUMN total_pages INTEGER DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE esign_documents ADD COLUMN s3_url TEXT")
         except Exception:
             pass
         try:

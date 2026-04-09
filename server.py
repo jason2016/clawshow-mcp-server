@@ -2069,6 +2069,44 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
         except Exception:
             return unsigned_pdf
 
+    def _upload_signed_pdf_to_s3(signed_pdf: str, namespace: str, doc_id: str) -> str:
+        """Upload signed PDF to S3. Returns HTTPS URL or empty string on failure."""
+        try:
+            import boto3 as _boto3
+            bucket = os.environ.get("AWS_S3_BUCKET", "focusingpro")
+            region = os.environ.get("AWS_REGION", "eu-west-3")
+            key = f"{namespace}/esign/{doc_id}-signed.pdf"
+            s3 = _boto3.client(
+                "s3",
+                region_name=region,
+                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            )
+            s3.upload_file(signed_pdf, bucket, key, ExtraArgs={"ContentType": "application/pdf"})
+            return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+        except Exception as exc:
+            db.log_esign_audit(doc_id, "s3_upload_error", {"error": str(exc)})
+            return ""
+
+    def _next_day_morning(dt_str: str) -> str:
+        """Return next calendar day at 09:00 as YYYY-MM-DD HH:MM:SS."""
+        try:
+            from datetime import datetime as _dt, timedelta as _td
+            d = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
+            nxt = (d + _td(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            return nxt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return dt_str
+
+    def _fmt_dt(dt_str: str) -> str:
+        """Format ISO datetime as YYYY-MM-DD HH:MM:SS."""
+        try:
+            from datetime import datetime as _dt
+            d = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
+            return d.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return dt_str
+
     # ── PATH A: School admin counter-signs ──────────────────────────────────
     if signer_role == "school_admin":
         if signer:
@@ -2134,9 +2172,14 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
         # Apply digital signature (AES)
         signed_pdf = _complete_with_digital_sig(unsigned_pdf, doc_id, all_signers)
 
+        _s3_url_a = _upload_signed_pdf_to_s3(signed_pdf, namespace, doc_id)
+        if _s3_url_a:
+            db.update_esign_s3_url(doc_id, _s3_url_a)
+
         db.complete_esign_document(doc_id, signed_pdf, signer_ip, city=city, lu_approuve="lu et approuve")
         db.log_esign_audit(doc_id, "school_signed", {
             "city": city, "signer_ip": signer_ip, "school_signer": school_signer_name,
+            "s3_url": _s3_url_a,
         }, signer_id=signer["id"] if signer else None)
 
         signed_pdf_url = f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf"
@@ -2161,17 +2204,26 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
 
         callback_url = doc.get("callback_url", "")
         if callback_url:
-            def _fire_completed():
+            def _fire_completed(_s3=_s3_url_a, _sat=signed_at):
                 import requests as _r
-                payload = {"event": "document.completed", "provider": "clawshow_esign",
-                           "document_id": doc_id, "reference_id": doc.get("reference_id", ""),
-                           "namespace": namespace, "status": "completed",
-                           "signed_pdf_url": signed_pdf_url,
-                           "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit",
-                           "completed_at": signed_at}
+                payload = {
+                    "event": "document.completed", "provider": "clawshow_esign",
+                    "document_id": doc_id, "reference_id": doc.get("reference_id", ""),
+                    "namespace": namespace, "status": "completed",
+                    "signed_pdf_url": signed_pdf_url,
+                    "s3_url": _s3,
+                    "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit",
+                    "completed_at": _sat,
+                    "focusingpro_fields": {
+                        "b5bad4feeac241fda92998b1ea2bc269": "Contrat de signature terminé",
+                        "f90c66d8eca243529ad4ccf2f1e66a8e": _fmt_dt(_sat),
+                        "f4af5a376e5148e19971d2045ece2704": _next_day_morning(_sat),
+                        "271a401fde6d4d2195c15724c6f39553": _s3,
+                    },
+                }
                 hdrs = {"Content-Type": "application/json",
                         "X-ClawShow-Event": "document.completed",
-                        "X-ClawShow-Document-Id": doc_id, "X-ClawShow-Timestamp": signed_at}
+                        "X-ClawShow-Document-Id": doc_id, "X-ClawShow-Timestamp": _sat}
                 for attempt in range(3):
                     try:
                         resp = _r.post(callback_url, json=payload, headers=hdrs, timeout=10)
@@ -2184,7 +2236,7 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
 
         return JSONResponse({
             "success": True, "document_id": doc_id,
-            "signed_pdf_url": signed_pdf_url, "signed_at": signed_at,
+            "signed_pdf_url": signed_pdf_url, "s3_url": _s3_url_a, "signed_at": signed_at,
         })
 
     # ── Check for school_admin co-signer ────────────────────────────────────
@@ -2279,25 +2331,39 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
             paraphes={k: v for k, v in paraphes_raw.items()}, city=city,
         )
 
+    _s3_url_c = _upload_signed_pdf_to_s3(signed_pdf, namespace, doc_id)
+    if _s3_url_c:
+        db.update_esign_s3_url(doc_id, _s3_url_c)
+
     db.complete_esign_document(doc_id, signed_pdf, signer_ip, city=city, lu_approuve="lu et approuve")
     db.log_esign_audit(doc_id, "signed", {
         "city": city, "pages_paraphed": list(paraphes_bytes.keys()), "signer_ip": signer_ip,
+        "s3_url": _s3_url_c,
     }, signer_id=signer["id"] if signer else None)
 
     signed_pdf_url = f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf"
 
     callback_url = doc.get("callback_url", "")
     if callback_url:
-        def _fire_callback():
+        def _fire_callback(_s3=_s3_url_c, _sat=signed_at):
             import requests as _r
-            payload = {"event": "document.completed", "provider": "clawshow_esign",
-                       "document_id": doc_id, "reference_id": doc.get("reference_id", ""),
-                       "namespace": namespace, "status": "completed",
-                       "signed_pdf_url": signed_pdf_url,
-                       "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit",
-                       "completed_at": signed_at}
+            payload = {
+                "event": "document.completed", "provider": "clawshow_esign",
+                "document_id": doc_id, "reference_id": doc.get("reference_id", ""),
+                "namespace": namespace, "status": "completed",
+                "signed_pdf_url": signed_pdf_url,
+                "s3_url": _s3,
+                "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit",
+                "completed_at": _sat,
+                "focusingpro_fields": {
+                    "b5bad4feeac241fda92998b1ea2bc269": "Contrat de signature terminé",
+                    "f90c66d8eca243529ad4ccf2f1e66a8e": _fmt_dt(_sat),
+                    "f4af5a376e5148e19971d2045ece2704": _next_day_morning(_sat),
+                    "271a401fde6d4d2195c15724c6f39553": _s3,
+                },
+            }
             hdrs = {"Content-Type": "application/json", "X-ClawShow-Event": "document.completed",
-                    "X-ClawShow-Document-Id": doc_id, "X-ClawShow-Timestamp": signed_at}
+                    "X-ClawShow-Document-Id": doc_id, "X-ClawShow-Timestamp": _sat}
             for attempt in range(3):
                 try:
                     resp = _r.post(callback_url, json=payload, headers=hdrs, timeout=10)
@@ -2310,7 +2376,7 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
 
     return JSONResponse({
         "success": True, "document_id": doc_id,
-        "signed_pdf_url": signed_pdf_url, "signed_at": signed_at,
+        "signed_pdf_url": signed_pdf_url, "s3_url": _s3_url_c, "signed_at": signed_at,
     })
 
 
@@ -2361,6 +2427,7 @@ async def esign_status(request: Request) -> JSONResponse:
         "city": doc.get("city"),
         "reference_id": doc.get("reference_id", ""),
         "signed_pdf_url": f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf" if doc["status"] == "completed" else None,
+        "s3_url": doc.get("s3_url") or None,
         "created_at": doc.get("created_at"),
         "signers": [
             {
