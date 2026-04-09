@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.9.0] — 2026-04-09
+
+### Added — External PDF Signing (FocusingPro / file_url mode)
+
+- **`send_esign_request` MCP Tool expanded**: new parameters `file_url`, `signers` (JSON array), `signature_fields`, `expiration_days`, `reminder_frequency`
+- **`file_url` mode**: pass an S3 pre-signed URL (or any HTTPS PDF) to sign externally-generated contracts without a ClawShow template
+- **Multi-party signers array**: `[{role, name, email, order}]` — supports dual-party and custom signing workflows
+- **S3 upload on completion**: signed PDF automatically uploaded to `{namespace}/esign/{document_id}-signed.pdf` in configured S3 bucket (boto3, AWS credentials from .env)
+- **`s3_url` persisted** in `esign_documents` table and returned by `/esign/{id}/status`
+- **FocusingPro webhook field mapping**: `document.completed` payload now includes `focusingpro_fields` dict with 4 GUIDs mapping to status string, signed_at, effective date (+1 day 09:00), and s3_url
+- **`_generate_page_images()`** added to `tools/esign.py` (PyMuPDF 2x zoom PNG render per page)
+- **`_generate_pdf()`** now returns `(html_path, pdf_path, total_pages)` 3-tuple
+- **`db.create_esign_document()`** accepts `total_pages`, `signature_positions`, `initial_status`
+
+### Fixed
+
+- `db.py` migration block structure corrected for `s3_url` column addition
+
+---
+
 ## [1.8.0] — 2026-04-09
 
 ### Added — eSign AES (Advanced Electronic Signature) Compliance
