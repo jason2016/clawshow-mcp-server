@@ -583,3 +583,289 @@ def confirm_dine_order_payment(namespace: str, order_id: int, payment_method: st
         if cur.rowcount == 0:
             return {"success": False, "error": f"Order {order_id} not found"}
     return {"success": True, "order_id": order_id, "payment_status": "paid", "amount_received": amount_received}
+
+
+# ---------------------------------------------------------------------------
+# eSign V2 — multi-signer, audit, OTP
+
+def _ensure_esign_v2_schema():
+    """Add V2 columns and tables if they don't exist yet."""
+    with get_conn() as conn:
+        # Multi-signer table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS esign_signers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'student',
+                signer_name TEXT,
+                signer_email TEXT,
+                signing_order INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'pending',
+                token TEXT UNIQUE,
+                signature_png TEXT,
+                paraphe_png TEXT,
+                paraphes TEXT,
+                city TEXT,
+                lu_approuve_png TEXT,
+                decline_reason TEXT,
+                signer_ip TEXT,
+                notified_at TEXT,
+                viewed_at TEXT,
+                signed_at TEXT,
+                otp_verified_at TEXT,
+                FOREIGN KEY (document_id) REFERENCES esign_documents(id)
+            )
+        """)
+        # Audit log
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS esign_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id TEXT NOT NULL,
+                signer_id INTEGER,
+                action TEXT NOT NULL,
+                detail TEXT,
+                ip_address TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (document_id) REFERENCES esign_documents(id)
+            )
+        """)
+        # OTP table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS esign_otp (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id TEXT NOT NULL,
+                signer_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                expires_at TEXT NOT NULL,
+                verified_at TEXT,
+                attempts INTEGER DEFAULT 0,
+                locked_until TEXT,
+                FOREIGN KEY (document_id) REFERENCES esign_documents(id),
+                FOREIGN KEY (signer_id) REFERENCES esign_signers(id)
+            )
+        """)
+        # Add V2 columns to esign_documents if missing
+        try:
+            conn.execute("ALTER TABLE esign_documents ADD COLUMN total_pages INTEGER DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE esign_documents ADD COLUMN expiration_days INTEGER DEFAULT 30")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE esign_documents ADD COLUMN reminder_frequency TEXT DEFAULT 'EVERY_THIRD_DAY'")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE esign_documents ADD COLUMN last_reminder_at TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE esign_documents ADD COLUMN reference_id TEXT")
+        except Exception:
+            pass
+        # Add otp_verified_at to esign_signers if missing
+        try:
+            conn.execute("ALTER TABLE esign_signers ADD COLUMN otp_verified_at TEXT")
+        except Exception:
+            pass
+
+_ensure_esign_v2_schema()
+
+
+def create_esign_signer(document_id: str, role: str, signer_name: str, signer_email: str,
+                         signing_order: int, token: str) -> dict:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO esign_signers
+               (document_id, role, signer_name, signer_email, signing_order, token, status)
+               VALUES (?,?,?,?,?,?,'pending')""",
+            (document_id, role, signer_name, signer_email, signing_order, token),
+        )
+    return {"id": cur.lastrowid, "token": token}
+
+
+def get_signer_by_token(token: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM esign_signers WHERE token = ?", (token,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_signers_by_document(doc_id: str) -> list:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM esign_signers WHERE document_id = ? ORDER BY signing_order",
+            (doc_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_signer_viewed(signer_id: int) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE esign_signers SET status='signing', viewed_at=? WHERE id=? AND status='pending'",
+            (now, signer_id),
+        )
+
+
+def update_signer_signed(signer_id: int, signer_ip: str, signature_png: str = "",
+                          paraphe_png: str = "", paraphes: dict = None, city: str = "",
+                          lu_approuve_png: str = "") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE esign_signers
+               SET status='signed', signer_ip=?, signed_at=?,
+                   signature_png=?, paraphe_png=?, paraphes=?,
+                   city=?, lu_approuve_png=?
+               WHERE id=?""",
+            (signer_ip, now, signature_png, paraphe_png,
+             json.dumps(paraphes) if paraphes else None,
+             city, lu_approuve_png, signer_id),
+        )
+    return {"success": True, "signer_id": signer_id, "signed_at": now}
+
+
+def update_signer_status(signer_id: int, status: str, reason: str = "") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE esign_signers SET status=?, decline_reason=?, signed_at=? WHERE id=? ",
+            (status, reason, now if status == "declined" else None, signer_id),
+        )
+    return {"success": True, "signer_id": signer_id, "status": status}
+
+
+def update_document_status(doc_id: str, status: str, completed_at: str = None) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        if completed_at or status == "completed":
+            conn.execute(
+                "UPDATE esign_documents SET status=?, completed_at=? WHERE id=?",
+                (status, completed_at or now, doc_id),
+            )
+        else:
+            conn.execute("UPDATE esign_documents SET status=? WHERE id=?", (status, doc_id))
+    return {"success": True, "doc_id": doc_id, "status": status}
+
+
+def log_esign_audit(doc_id: str, action: str, detail: dict = None,
+                     signer_id: int = None, ip_address: str = None) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO esign_audit_log (document_id, signer_id, action, detail, ip_address) VALUES (?,?,?,?,?)",
+            (doc_id, signer_id, action, json.dumps(detail) if detail else None, ip_address),
+        )
+
+
+def get_pending_esign_documents() -> list:
+    """Return all documents still waiting for signatures (including student_signed)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM esign_documents WHERE status IN "
+            "('student_signing','school_signing','pending','student_signed')"
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        if isinstance(d.get("fields"), str):
+            try:
+                d["fields"] = json.loads(d["fields"])
+            except Exception:
+                pass
+        result.append(d)
+    return result
+
+
+def update_esign_last_reminder(doc_id: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute("UPDATE esign_documents SET last_reminder_at=? WHERE id=?", (now, doc_id))
+
+
+# ---------------------------------------------------------------------------
+# OTP functions
+
+def create_otp(document_id: str, signer_id: int, code: str) -> dict:
+    """Create a new OTP record, invalidating any prior pending ones."""
+    now = datetime.now(timezone.utc)
+    expires_at = (now + timedelta(minutes=10)).isoformat()
+    with get_conn() as conn:
+        # Invalidate old codes
+        conn.execute(
+            "UPDATE esign_otp SET verified_at='invalidated' WHERE document_id=? AND signer_id=? AND verified_at IS NULL",
+            (document_id, signer_id),
+        )
+        cur = conn.execute(
+            "INSERT INTO esign_otp (document_id, signer_id, code, expires_at) VALUES (?,?,?,?)",
+            (document_id, signer_id, code, expires_at),
+        )
+    return {"id": cur.lastrowid, "expires_at": expires_at}
+
+
+def get_active_otp(document_id: str, signer_id: int) -> dict | None:
+    """Get the most recent unverified, unexpired, unlocked OTP."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT * FROM esign_otp
+               WHERE document_id=? AND signer_id=? AND verified_at IS NULL
+               AND expires_at > ? AND (locked_until IS NULL OR locked_until < ?)
+               ORDER BY id DESC LIMIT 1""",
+            (document_id, signer_id, now, now),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def verify_otp(otp_id: int, document_id: str, signer_id: int) -> None:
+    """Mark OTP as verified and update signer otp_verified_at."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute("UPDATE esign_otp SET verified_at=? WHERE id=?", (now, otp_id))
+        conn.execute("UPDATE esign_signers SET otp_verified_at=? WHERE id=?", (now, signer_id))
+
+
+def increment_otp_attempts(otp_id: int, current_attempts: int) -> dict:
+    """Increment attempt counter; lock if >= 5 attempts."""
+    new_attempts = current_attempts + 1
+    now = datetime.now(timezone.utc)
+    locked_until = None
+    if new_attempts >= 5:
+        locked_until = (now + timedelta(minutes=30)).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE esign_otp SET attempts=?, locked_until=? WHERE id=?",
+            (new_attempts, locked_until, otp_id),
+        )
+    return {"attempts": new_attempts, "locked": locked_until is not None, "locked_until": locked_until}
+
+
+def is_otp_verified(document_id: str, signer_id: int) -> bool:
+    """Check if signer has a valid otp_verified_at on their record."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT otp_verified_at FROM esign_signers WHERE id=? AND document_id=?",
+            (signer_id, document_id),
+        ).fetchone()
+    if row and row[0] and row[0] != "invalidated":
+        return True
+    return False
+
+
+def is_otp_locked(document_id: str, signer_id: int) -> dict:
+    """Check if signer is locked out due to too many failed OTP attempts."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT locked_until FROM esign_otp
+               WHERE document_id=? AND signer_id=? AND verified_at IS NULL
+               AND locked_until IS NOT NULL AND locked_until > ?
+               ORDER BY id DESC LIMIT 1""",
+            (document_id, signer_id, now),
+        ).fetchone()
+    if row:
+        return {"locked": True, "locked_until": row[0]}
+    return {"locked": False}

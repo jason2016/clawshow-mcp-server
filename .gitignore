@@ -11,3 +11,9 @@ data/clawshow.db-wal
 data/clawshow.db-shm
 .venv/
 venv/
+.mcpregistry_github_token
+.mcpregistry_registry_token
+server.py.bak
+.mcpregistry_github_token
+.mcpregistry_registry_token
+server.py.bak

@@ -381,3 +381,444 @@ def register(mcp, record_call: Callable) -> None:
             "created_at": created_at,
             "email_sent": send_email and bool(signer_email),
         }, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# V2: Multi-page overlay + school counter-sign
+
+_DEFAULT_SIG_POSITIONS = {
+    "paraphe":   {"x": 390, "y": 22, "w": 160, "h": 48},
+    "final_lu":  {"x": 90,  "y": 130, "w": 220, "h": 38},
+    "final_sig": {"x": 90,  "y": 70,  "w": 220, "h": 70},
+    "school_sig":{"x": 330, "y": 30,  "w": 200, "h": 70},
+}
+
+
+def _overlay_signatures_pdf(
+    original_pdf: str,
+    signed_pdf: str,
+    paraphes: dict,
+    final_sig: dict,
+    sig_positions: dict = None,
+    school_sig: dict = None,
+) -> None:
+    """
+    Overlay paraphes on each page + full signature block on last page.
+    paraphes: {page_num: bytes} (1-indexed)
+    final_sig: {sig_bytes, lu_bytes, city, signer_name, signed_at, signer_ip}
+    school_sig: optional {sig_bytes, city, signer_name, signed_at} for counter-sign
+    """
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib.utils import ImageReader
+    from PyPDF2 import PdfReader, PdfWriter
+    import io as _io
+
+    pos = sig_positions or _DEFAULT_SIG_POSITIONS
+    reader = PdfReader(original_pdf)
+    writer = PdfWriter()
+    total = len(reader.pages)
+
+    for page_num in range(1, total + 1):
+        page = reader.pages[page_num - 1]
+        w = float(page.mediabox.width)
+        h = float(page.mediabox.height)
+        scale = w / 595.0  # A4 reference width
+        is_last = (page_num == total)
+
+        has_paraphe = page_num in paraphes and paraphes[page_num]
+        has_final = is_last and final_sig and final_sig.get("sig_bytes")
+
+        if has_paraphe or has_final:
+            packet = _io.BytesIO()
+            c = rl_canvas.Canvas(packet, pagesize=(w, h))
+
+            if has_paraphe:
+                pp = pos["paraphe"]
+                c.drawImage(
+                    ImageReader(_io.BytesIO(paraphes[page_num])),
+                    pp["x"] * scale, pp["y"],
+                    width=pp["w"] * scale, height=pp["h"],
+                    mask="auto", preserveAspectRatio=True,
+                )
+
+            if has_final:
+                sf = final_sig
+                # "lu et approuve" image
+                if sf.get("lu_bytes"):
+                    lp = pos["final_lu"]
+                    c.drawImage(
+                        ImageReader(_io.BytesIO(sf["lu_bytes"])),
+                        lp["x"] * scale, lp["y"],
+                        width=lp["w"] * scale, height=lp["h"],
+                        mask="auto", preserveAspectRatio=True,
+                    )
+                # Final signature image
+                fp = pos["final_sig"]
+                c.drawImage(
+                    ImageReader(_io.BytesIO(sf["sig_bytes"])),
+                    fp["x"] * scale, fp["y"],
+                    width=fp["w"] * scale, height=fp["h"],
+                    mask="auto", preserveAspectRatio=True,
+                )
+                # Signer metadata footer
+                c.setFont("Helvetica", 7)
+                c.setFillColorRGB(0.5, 0.5, 0.5)
+                c.drawString(fp["x"] * scale, 30,
+                             (sf.get("signer_name", "")[:24] + " | " +
+                              sf.get("city", "") + " | " +
+                              sf.get("signed_at", "")[:10]))
+                c.drawString(fp["x"] * scale, 20,
+                             "IP: " + sf.get("signer_ip", "")[:20])
+
+                # School counter-signature
+                if school_sig and school_sig.get("sig_bytes"):
+                    sp2 = pos["school_sig"]
+                    c.drawImage(
+                        ImageReader(_io.BytesIO(school_sig["sig_bytes"])),
+                        sp2["x"] * scale, sp2["y"],
+                        width=sp2["w"] * scale, height=sp2["h"],
+                        mask="auto", preserveAspectRatio=True,
+                    )
+                    c.setFont("Helvetica", 7)
+                    c.setFillColorRGB(0.5, 0.5, 0.5)
+                    c.drawString(sp2["x"] * scale, 18,
+                                 "Admin: " + school_sig.get("signer_name", "")[:20] +
+                                 " | " + school_sig.get("signed_at", "")[:10])
+
+                # AES compliance footer
+                doc_id = sf.get("doc_id", "")
+                ts = sf.get("signed_at", "")[:19].replace("T", " ")
+                mcp_base = os.getenv("MCP_BASE_URL", "https://mcp.clawshow.ai")
+                c.setFont("Helvetica", 6)
+                c.setFillColorRGB(0.4, 0.4, 0.4)
+                footer1 = (
+                    "Signe via ClawShow eSign — Signature Electronique Avancee (AES) conforme eIDAS | "
+                    f"Document ID: {doc_id} | Horodatage: {ts}"
+                )
+                footer2 = f"Verification: {mcp_base}/esign/{doc_id}/verify"
+                c.drawString(30, 8, footer1[:120])
+                c.drawString(30, 2, footer2)
+
+            c.save()
+            packet.seek(0)
+            overlay = PdfReader(packet).pages[0]
+            page.merge_page(overlay)
+
+        writer.add_page(page)
+
+    os.makedirs(os.path.dirname(signed_pdf), exist_ok=True)
+    with open(signed_pdf, "wb") as f:
+        writer.write(f)
+
+
+# ---------------------------------------------------------------------------
+# Email helpers
+
+def _send_school_notification_email(
+    student_name: str, school_email: str, school_name: str,
+    school_signing_url: str, doc_id: str,
+) -> None:
+    """Email school admin when student has signed asking for counter-signature."""
+    try:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not school_email:
+            return
+        subject = f"[ClawShow eSign] Convention signee par {student_name} — a contresigner"
+        html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
+          <div style="background:#1a1a2e;padding:24px;text-align:center;border-radius:12px 12px 0 0">
+            <h1 style="color:white;margin:0;font-size:20px">ClawShow eSign</h1>
+          </div>
+          <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">
+            <p>Bonjour {school_name or "Administration"},</p>
+            <p>L'etudiant(e) <strong>{student_name}</strong> a signe sa convention.</p>
+            <p>Veuillez contresigner en cliquant sur le lien suivant :</p>
+            <div style="text-align:center;margin:28px 0">
+              <a href="{school_signing_url}"
+                 style="background:#1a1a2e;color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-size:16px;font-weight:600">
+                Contresigner le document
+              </a>
+            </div>
+            <p style="font-size:12px;color:#999">Document ID: {doc_id}</p>
+          </div>
+        </div>"""
+        _send_html_email(user, pwd, host, port, school_email,
+                         f"ClawShow eSign <{user}>", subject, html)
+    except Exception:
+        pass
+
+
+def _send_completion_email(
+    recipient_name: str, recipient_email: str, doc_id: str, signed_pdf_url: str,
+) -> None:
+    """Email both parties when document is fully signed."""
+    try:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not recipient_email:
+            return
+        subject = "[ClawShow eSign] Document signe par toutes les parties"
+        html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
+          <div style="background:#1a1a2e;padding:24px;text-align:center;border-radius:12px 12px 0 0">
+            <h1 style="color:white;margin:0;font-size:20px">ClawShow eSign &#x2705;</h1>
+          </div>
+          <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">
+            <p>Bonjour {recipient_name},</p>
+            <p>Le document a ete signe par toutes les parties.</p>
+            <div style="text-align:center;margin:28px 0">
+              <a href="{signed_pdf_url}"
+                 style="background:#28a745;color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-size:16px;font-weight:600">
+                Telecharger le document signe
+              </a>
+            </div>
+            <p style="font-size:12px;color:#999">Document ID: {doc_id}</p>
+          </div>
+        </div>"""
+        _send_html_email(user, pwd, host, port, recipient_email,
+                         f"ClawShow eSign <{user}>", subject, html)
+    except Exception:
+        pass
+
+
+def _send_expiration_email(recipient_name: str, recipient_email: str,
+                            doc_id: str, lang: str = "fr") -> None:
+    """Email signers when a document has expired."""
+    try:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not recipient_email:
+            return
+        subject = "[ClawShow eSign] Document expire" if lang == "fr" else "[ClawShow eSign] Document expired"
+        body = (
+            f"<p>Bonjour {recipient_name},</p><p>Le document (ID: {doc_id}) a expire sans avoir ete signe par toutes les parties.</p>"
+            if lang == "fr" else
+            f"<p>Hello {recipient_name},</p><p>Document (ID: {doc_id}) has expired without being signed by all parties.</p>"
+        )
+        html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
+          <div style="background:#1a1a2e;padding:24px;text-align:center;border-radius:12px 12px 0 0">
+            <h1 style="color:white;margin:0;font-size:20px">ClawShow eSign</h1>
+          </div>
+          <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">{body}</div>
+        </div>"""
+        _send_html_email(user, pwd, host, port, recipient_email,
+                         f"ClawShow eSign <{user}>", subject, html)
+    except Exception:
+        pass
+
+
+def _send_otp_email(signer_name: str, signer_email: str, code: str) -> None:
+    """Send OTP verification code email."""
+    try:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not signer_email:
+            return
+        subject = f"[ClawShow eSign] Votre code de verification : {code}"
+        html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
+          <div style="background:#1a1a2e;padding:24px;text-align:center;border-radius:12px 12px 0 0">
+            <h1 style="color:white;margin:0;font-size:20px">&#x1F512; ClawShow eSign</h1>
+          </div>
+          <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">
+            <p>Bonjour {signer_name},</p>
+            <p>Votre code de verification pour signer le document est :</p>
+            <div style="text-align:center;margin:28px 0;font-size:42px;font-weight:700;letter-spacing:12px;
+                        font-family:monospace;color:#1a1a2e;background:#f5f5f5;padding:20px;border-radius:8px">
+              {code}
+            </div>
+            <p style="color:#666">Ce code est valable <strong>10 minutes</strong>.</p>
+            <p style="font-size:12px;color:#999">Si vous n&#x27;avez pas demande ce code, veuillez ignorer cet email.</p>
+            <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+            <p style="font-size:11px;color:#aaa;text-align:center">ClawShow eSign — Signature Electronique Avancee (AES)</p>
+          </div>
+        </div>"""
+        _send_html_email(user, pwd, host, port, signer_email,
+                         f"ClawShow eSign <{user}>", subject, html)
+    except Exception:
+        pass
+
+
+def _send_html_email(user: str, pwd: str, host: str, port: int,
+                      to: str, from_: str, subject: str, html: str) -> None:
+    """Internal helper to send an HTML email via SMTP_SSL."""
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = from_
+    msg["To"] = to
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
+        srv.login(user, pwd)
+        srv.send_message(msg)
+
+
+# ---------------------------------------------------------------------------
+# PDF digital signature (AES level — pyhanko + self-signed cert)
+
+_CERT_KEY = "/opt/clawshow-data/certs/esign-key.pem"
+_CERT_CRT = "/opt/clawshow-data/certs/esign-cert.pem"
+
+
+def digitally_sign_pdf(input_path: str, output_path: str, document_id: str,
+                        signers_info: list = None) -> str:
+    """
+    Apply an X.509 digital signature to the PDF using pyhanko.
+    Returns output_path on success, input_path on failure (graceful degradation).
+    """
+    try:
+        if not os.path.exists(_CERT_KEY) or not os.path.exists(_CERT_CRT):
+            return input_path  # cert not generated yet, skip gracefully
+
+        from pyhanko.sign import signers, fields
+        from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
+        from pyhanko.sign.fields import SigFieldSpec
+
+        signer = signers.SimpleSigner.load(_CERT_KEY, _CERT_CRT)
+
+        reason_parts = [f"Document signed via ClawShow eSign (ID: {document_id})"]
+        if signers_info:
+            names = ", ".join(s.get("signer_name", "") for s in signers_info if s.get("signer_name"))
+            if names:
+                reason_parts.append(f"Signataires: {names}")
+        reason = " | ".join(reason_parts)
+
+        with open(input_path, "rb") as f:
+            writer = IncrementalPdfFileWriter(f)
+
+            fields.append_signature_field(
+                writer,
+                sig_field_spec=SigFieldSpec(
+                    sig_field_name="ClawShowESign",
+                    on_page=0,
+                    box=(30, 30, 250, 80),
+                ),
+            )
+
+            meta = signers.PdfSignatureMetadata(
+                field_name="ClawShowESign",
+                reason=reason,
+                name="ClawShow eSign Platform",
+                location="Paris, France",
+                contact_info="support@clawshow.ai",
+            )
+
+            with open(output_path, "wb") as out:
+                signers.sign_pdf(writer, meta, signer=signer, output=out)
+
+        return output_path
+    except Exception as e:
+        # Graceful degradation: digital signing optional, don't break the flow
+        import shutil
+        shutil.copy2(input_path, output_path)
+        return output_path
+
+
+def verify_signed_pdf(signed_pdf_path: str) -> dict:
+    """
+    Verify the digital signature on a signed PDF.
+    Returns integrity dict.
+    """
+    try:
+        if not os.path.exists(signed_pdf_path):
+            return {"integrity": "unknown", "error": "File not found"}
+
+        from pyhanko.sign.validation import validate_pdf_signature
+        from pyhanko.pdf_utils.reader import PdfFileReader
+
+        with open(signed_pdf_path, "rb") as f:
+            reader = PdfFileReader(f)
+            sigs = reader.embedded_signatures
+            if not sigs:
+                return {"integrity": "unsigned", "signed_by": None}
+
+            sig = sigs[0]
+            status = validate_pdf_signature(sig)
+            return {
+                "integrity": "valid" if status.intact else "tampered",
+                "signed_by": status.signer_reported_dt and "ClawShow eSign Platform",
+                "signed_at": str(status.signer_reported_dt) if status.signer_reported_dt else None,
+                "intact": status.intact,
+                "valid": status.valid,
+            }
+    except Exception as e:
+        return {"integrity": "unknown", "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# check_pending_reminders (cron)
+
+def check_pending_reminders() -> None:
+    """Called daily. Send reminder emails and process expired documents."""
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    now = _dt.now(_tz.utc)
+    pending = db.get_pending_esign_documents()
+
+    for doc in pending:
+        created = doc.get("created_at", "")
+        try:
+            created_dt = _dt.fromisoformat(created.replace("Z", "+00:00"))
+        except Exception:
+            continue
+
+        days_since = (now - created_dt).days
+        expiry = int(doc.get("expiration_days") or 30)
+
+        if days_since > expiry:
+            db.update_document_status(doc["id"], "expired")
+            db.log_esign_audit(doc["id"], "expired", {"days_since": days_since})
+            try:
+                for sg in db.get_signers_by_document(doc["id"]):
+                    if sg.get("status") not in ("signed", "declined") and sg.get("signer_email"):
+                        _send_expiration_email(sg.get("signer_name", ""), sg["signer_email"],
+                                               doc["id"], doc.get("language", "fr"))
+            except Exception:
+                pass
+            callback_url = doc.get("callback_url", "")
+            if callback_url:
+                import threading as _thr
+                def _fire(cb=callback_url, did=doc["id"], ns=doc.get("namespace", "")):
+                    import requests as _r
+                    from datetime import datetime as _dt2, timezone as _tz2
+                    ts = _dt2.now(_tz2.utc).isoformat()
+                    try:
+                        _r.post(cb, json={"event": "document.expired", "document_id": did,
+                                          "namespace": ns, "status": "expired", "expired_at": ts},
+                                timeout=10)
+                    except Exception:
+                        pass
+                _thr.Thread(target=_fire, daemon=True).start()
+            continue
+
+        freq = (doc.get("reminder_frequency") or "EVERY_THIRD_DAY").upper()
+        interval = 3 if "THIRD" in freq else 7 if "WEEK" in freq else 3
+        last_reminder = doc.get("last_reminder_at", "")
+        if last_reminder:
+            try:
+                last_dt = _dt.fromisoformat(last_reminder.replace("Z", "+00:00"))
+                days_since_reminder = (now - last_dt).days
+            except Exception:
+                days_since_reminder = interval
+        else:
+            days_since_reminder = days_since
+
+        if days_since_reminder >= interval:
+            try:
+                for sg in db.get_signers_by_document(doc["id"]):
+                    if sg.get("status") == "pending" and sg.get("signer_email") and sg.get("token"):
+                        mcp_base = os.getenv("MCP_BASE_URL", "https://mcp.clawshow.ai")
+                        signing_url = f"{mcp_base}/esign/{doc['id']}?token={sg['token']}"
+                        _send_signing_email(sg["signer_name"], sg["signer_email"],
+                                            signing_url, doc["id"], doc.get("language", "fr"))
+                db.update_esign_last_reminder(doc["id"])
+                db.log_esign_audit(doc["id"], "reminder_sent", {"days_since": days_since})
+            except Exception:
+                pass
