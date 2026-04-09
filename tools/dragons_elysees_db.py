@@ -316,10 +316,19 @@ def get_order_by_payment_id(payment_id: str) -> dict | None:
     return _row_to_order(row) if row else None
 
 
+def get_order_by_number(order_number: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM orders WHERE order_number = ?", (order_number,)
+        ).fetchone()
+    return _row_to_order(row) if row else None
+
+
 def query_orders(
     status: str = "",
     date: str = "",
     customer_id: int | None = None,
+    order_number: str = "",
 ) -> list[dict]:
     sql = "SELECT * FROM orders WHERE 1=1"
     params: list = []
@@ -332,6 +341,9 @@ def query_orders(
     if customer_id is not None:
         sql += " AND customer_id = ?"
         params.append(customer_id)
+    if order_number:
+        sql += " AND order_number = ?"
+        params.append(order_number)
     sql += " ORDER BY id DESC"
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()

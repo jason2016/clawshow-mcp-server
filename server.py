@@ -1972,9 +1972,10 @@ async def de_get_orders(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Service unavailable"}, status_code=503)
     status = request.query_params.get("status", "")
     date = request.query_params.get("date", "")
+    order_number = request.query_params.get("order_number", "")
     cid_str = request.query_params.get("customer_id", "")
     customer_id = int(cid_str) if cid_str.isdigit() else None
-    orders = _de_db.query_orders(status=status, date=date, customer_id=customer_id)
+    orders = _de_db.query_orders(status=status, date=date, customer_id=customer_id, order_number=order_number)
     return JSONResponse({"orders": orders, "total": len(orders)})
 
 
