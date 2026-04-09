@@ -79,15 +79,27 @@ _FALLBACK_TEMPLATES: dict = {
 # ---------------------------------------------------------------------------
 
 def _next_doc_id(namespace: str) -> str:
-    """Generate esign_YYYY_NNNN style ID."""
+    """Generate esign_YYYY_NNNN style ID, collision-safe."""
     year = datetime.now(timezone.utc).year
+    prefix = f"esign_{year}_"
     with db.get_conn() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) as cnt FROM esign_documents WHERE namespace = ? AND id LIKE ?",
-            (namespace, f"esign_{year}_%"),
-        ).fetchone()
-        n = (row["cnt"] or 0) + 1
-    return f"esign_{year}_{n:04d}"
+        rows = conn.execute(
+            "SELECT id FROM esign_documents WHERE id LIKE ?",
+            (f"{prefix}%",),
+        ).fetchall()
+        existing_nums = set()
+        for r in rows:
+            try:
+                existing_nums.add(int(r["id"][len(prefix):]))
+            except ValueError:
+                pass
+        n = max(existing_nums, default=0) + 1
+        candidate = f"{prefix}{n:04d}"
+        existing_ids = {r["id"] for r in rows}
+        while candidate in existing_ids:
+            n += 1
+            candidate = f"{prefix}{n:04d}"
+    return candidate
 
 
 # ---------------------------------------------------------------------------

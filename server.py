@@ -1895,6 +1895,28 @@ async def esign_signing_page(request: Request):
     if doc["status"] == "declined":
         return HTMLResponse("<h2 style='font-family:Arial;padding:40px'>Ce document a été refusé.</h2>")
 
+    # If no token: redirect to token-bearing URL (creates signer for V1 docs)
+    if not token:
+        from starlette.responses import RedirectResponse as _Redir
+        import uuid as _uuid
+        signers_list = db.get_signers_by_document(doc_id)
+        if signers_list:
+            # Redirect to first pending/signing signer's token
+            first_s = next((s for s in signers_list if s.get("status") in ("pending", "signing")), signers_list[0])
+            return _Redir(f"/esign/{doc_id}?token={first_s['token']}", status_code=302)
+        else:
+            # V1 doc with no signer records — create one and redirect
+            new_token = str(_uuid.uuid4())
+            db.create_esign_signer(
+                document_id=doc_id, role="student",
+                signer_name=doc.get("signer_name", ""), signer_email=doc.get("signer_email", ""),
+                signing_order=1, token=new_token,
+            )
+            with db.get_conn() as _c:
+                _c.execute("UPDATE esign_documents SET signing_url=? WHERE id=?",
+                           (f"{MCP_BASE_URL}/esign/{doc_id}?token={new_token}", doc_id))
+            return _Redir(f"/esign/{doc_id}?token={new_token}", status_code=302)
+
     # Validate token and check OTP verification
     if token:
         signer = db.get_signer_by_token(token)
