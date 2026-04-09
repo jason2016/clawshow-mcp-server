@@ -6,7 +6,7 @@
     "url": "https://github.com/jason2016/clawshow-mcp-server",
     "source": "github"
   },
-  "version": "1.8.0",
+  "version": "1.9.0",
   "remotes": [
     {
       "type": "sse",
