@@ -677,9 +677,6 @@ button{cursor:pointer}
 .btn-danger{padding:8px 16px;background:#c62828;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600}
 /* RESULT */
 #resultArea{padding:60px 16px;text-align:center;max-width:500px;margin:0 auto}
-.aes-badge-hdr{display:inline-block;background:linear-gradient(135deg,#1a5276,#2980b9);color:white;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;margin-left:8px;letter-spacing:.5px;vertical-align:middle}
-.aes-compliance-footer{font-size:11px;color:#888;text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #e0e0e0}
-.aes-details-box{background:#f0f7ff;padding:12px 16px;border-radius:8px;margin:16px 0;font-size:13px;text-align:left;border:1px solid #cce0ff}
 .res-ok{background:#fff;border:1px solid #ddd;border-radius:12px;padding:36px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .res-ok h2{color:#28a745;font-size:22px;margin-bottom:12px}
 .res-ok p{color:#555;line-height:1.65;margin-bottom:6px}
@@ -692,7 +689,7 @@ button{cursor:pointer}
 
 <!-- TOP BAR -->
 <div id="topBar">
-  <div id="docBrand">ClawShow eSign <span class="aes-badge-hdr">&#x1F512; AES</span></div>
+  <div id="docBrand">ClawShow eSign</div>
   <div id="progWrap">
     <div id="progBar"><div id="progFill"></div></div>
     <span id="reqLeftLabel"></span>
@@ -888,29 +885,12 @@ function renderView(){
 }
 function renderZones(){
   const c=document.getElementById('sigZones');c.innerHTML='';
-  const n=S.cur;
-  if(C.school_mode){
-    // Read-only student paraphe overlay
-    const sp=C.student_paraphes&&C.student_paraphes[String(n)];
-    if(sp){const zs=document.createElement('div');zs.className='sz done';zs.style.cssText='right:3.5%;bottom:2%;width:18%;height:6%';const img=document.createElement('img');img.src=sp;zs.appendChild(img);c.appendChild(zs);}
-    // School signature zone on last page only
-    if(n===S.total){
-      const sdone=S.ff.fs;
-      const zsch=document.createElement('div');
-      zsch.className='sz '+(sdone?'done':'pend');
-      zsch.style.cssText='left:3.5%;bottom:8%;width:22%;height:9%';
-      if(sdone){const img=document.createElement('img');img.src=S.savedSig||'';zsch.appendChild(img);}
-      else{zsch.innerHTML='<span class="zi">✍</span><span class="zh">Administration scolaire</span>';zsch.addEventListener('click',()=>{S.sigTarget='school';openSetup();});}
-      c.appendChild(zsch);
-    }
-    return;
-  }
-  const done=!!S.paraphes[n];
+  const n=S.cur,done=!!S.paraphes[n];
   const z=document.createElement('div');
   z.className='sz '+(done?'done':'pend');
   z.style.cssText='right:3.5%;bottom:2%;width:18%;height:6%';
   if(done){const img=document.createElement('img');img.src=S.paraphes[n];z.appendChild(img);}
-  else{z.innerHTML='<span class="zi">✍</span><span class="zh">'+(L.zone_sign||'Signer ici')+'</span>';z.addEventListener('click',()=>zoneClick(n));}
+  else{z.innerHTML='<span class="zi">\\u270d</span><span class="zh">'+(L.zone_sign||'Signer ici')+'</span>';z.addEventListener('click',()=>zoneClick(n));}
   c.appendChild(z);
 }
 
@@ -973,11 +953,6 @@ function confirmSetup(){
     S.paraphes[S.sigPage]=dataURL;
     updateBar();renderZones();
     setTimeout(()=>{if(S.sigPage<S.total)gotoPage(S.sigPage+1);},300);
-  } else if(S.sigTarget==='school'){
-    const cv=document.getElementById('fsCv');szCv(cv);
-    const ctx=cv.getContext('2d');const img=new Image();
-    img.onload=()=>{ctx.clearRect(0,0,cv.width,cv.height);ctx.drawImage(img,0,0,cv.width,cv.height);};
-    img.src=dataURL;S.fsHas=true;S.ff.fs=true;updateBar();renderZones();
   }
 }
 
@@ -1117,7 +1092,7 @@ function doFinish(){
     document.getElementById('topBar').style.display='none';
     document.getElementById('resultArea').style.display='block';
     if(d.success){
-      document.getElementById('resultArea').innerHTML='<div class="res-ok"><h2>'+(L.success_title||'\\u2705 Signature enregistr\\u00e9e')+'</h2><p>'+(L.success_msg||'Votre signature a \\u00e9t\\u00e9 enregistr\\u00e9e avec succ\\u00e8s.')+'<div class=\"aes-details-box\"><p>&#x1F512; Identit&#xE9; v&#xE9;rifi&#xE9;e par code OTP</p><p>&#x1F4C4; Document sign&#xE9; num&#xE9;riquement (SHA-256)</p><p>&#x23F1;&#xFE0F; Horodatage\u00a0: '+new Date().toLocaleString('fr-FR')+'</p></div>')+'</p><p style="margin-top:8px">'+(L.success_pending_school||'Le document est en attente de la signature de l\\u0027administration scolaire.')+'</p><p style="margin-top:8px">'+(L.success_email_note||'Vous recevrez un email de confirmation une fois le document finalis\\u00e9.')+'</p></div>';
+      document.getElementById('resultArea').innerHTML='<div class="res-ok"><h2>'+(L.success_title||'\\u2705 Signature enregistr\\u00e9e')+'</h2><p>'+(L.success_msg||'Votre signature a \\u00e9t\\u00e9 enregistr\\u00e9e avec succ\\u00e8s.')+'</p><p style="margin-top:8px">'+(L.success_pending_school||'Le document est en attente de la signature de l\\u0027administration scolaire.')+'</p><p style="margin-top:8px">'+(L.success_email_note||'Vous recevrez un email de confirmation une fois le document finalis\\u00e9.')+'</p></div>';
     } else {
       document.getElementById('resultArea').innerHTML='<div class="res-dec"><p>Error: '+(d.error||'Unknown')+'</p></div>';
     }
@@ -1190,213 +1165,8 @@ window.addEventListener('resize',()=>{
   if(S.cur===S.total){szCv(document.getElementById('luCv'));szCv(document.getElementById('fsCv'));}
 });
 </script>
-<div class="aes-compliance-footer">
-  <p>&#x1F512; Signature &#xC9;lectronique Avanc&#xE9;e (AES) conforme au R&#xE8;glement eIDAS (UE) n&#xB0;910/2014, Art.&#xA0;26<br>
-  Identit&#xE9; v&#xE9;rifi&#xE9;e par code OTP &#xB7; Int&#xE9;grit&#xE9; garantie par signature num&#xE9;rique SHA-256</p>
-  <p style="font-size:10px;color:#aaa;margin-top:4px;">Document ID: __ESIGN_DOC_ID__ &#xB7; Powered by ClawShow eSign &mdash; <a href="https://clawshow.ai/esign" style="color:#2980b9;text-decoration:none;">AES compliance info</a></p>
-</div>
 </body>
 </html>"""
-
-
-_OTP_PAGE_TEMPLATE = """<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ClawShow eSign — Verification</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,sans-serif;background:#f0f2f5;min-height:100vh;display:flex;align-items:center;justify-content:center}
-.wrap{background:white;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.12);width:100%;max-width:420px;overflow:hidden}
-.hdr{background:#1a1a2e;padding:20px;text-align:center;color:white}
-.hdr h1{font-size:18px;margin:0}
-.hdr p{font-size:12px;opacity:.7;margin-top:4px}
-.body{padding:28px}
-.icon{text-align:center;font-size:40px;margin-bottom:16px}
-h2{text-align:center;font-size:17px;color:#1a1a2e;margin-bottom:8px}
-.email-hint{text-align:center;color:#666;font-size:14px;margin-bottom:24px}
-.digits{display:flex;gap:8px;justify-content:center;margin-bottom:20px}
-.digits input{width:44px;height:54px;text-align:center;font-size:24px;font-weight:700;border:2px solid #ddd;border-radius:8px;outline:none;color:#1a1a2e;transition:border-color .15s}
-.digits input:focus{border-color:#1a1a2e}
-.digits input.filled{border-color:#4CAF50;background:#f8fff8}
-.err{color:#d32f2f;font-size:13px;text-align:center;margin-bottom:12px;min-height:18px}
-.btn-verify{width:100%;padding:14px;background:#1a1a2e;color:white;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;transition:opacity .2s}
-.btn-verify:disabled{opacity:.45;cursor:default}
-.resend-row{text-align:center;margin-top:16px;font-size:13px;color:#666}
-.btn-resend{background:none;border:none;color:#1a1a2e;font-weight:600;cursor:pointer;font-size:13px;text-decoration:underline}
-.btn-resend:disabled{color:#999;cursor:default;text-decoration:none}
-.timer{text-align:center;font-size:12px;color:#999;margin-top:10px}
-.loading{text-align:center;color:#666;font-size:14px;display:none}
-.aes-badge{margin-top:20px;padding:10px;background:#f8f9ff;border-radius:6px;font-size:11px;color:#666;text-align:center;border:1px solid #e8eaff}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="hdr">
-    <h1>ClawShow eSign</h1>
-    <p>Signature Electronique Avancee (AES)</p>
-  </div>
-  <div class="body">
-    <div class="icon">&#x1F512;</div>
-    <h2>Verification d&#x27;identite</h2>
-    <p class="email-hint">Un code a 6 chiffres a ete envoye a<br><strong id="maskedEmail">__MASKED_EMAIL__</strong></p>
-    <div class="digits">
-      <input type="tel" maxlength="1" id="d0" inputmode="numeric" pattern="[0-9]">
-      <input type="tel" maxlength="1" id="d1" inputmode="numeric" pattern="[0-9]">
-      <input type="tel" maxlength="1" id="d2" inputmode="numeric" pattern="[0-9]">
-      <input type="tel" maxlength="1" id="d3" inputmode="numeric" pattern="[0-9]">
-      <input type="tel" maxlength="1" id="d4" inputmode="numeric" pattern="[0-9]">
-      <input type="tel" maxlength="1" id="d5" inputmode="numeric" pattern="[0-9]">
-    </div>
-    <div class="err" id="errMsg"></div>
-    <button class="btn-verify" id="btnVerify" onclick="verify()">Verifier</button>
-    <div class="loading" id="loading">Verification en cours...</div>
-    <div class="resend-row">
-      Vous n&#x27;avez pas recu le code ?
-      <button class="btn-resend" id="btnResend" onclick="resend()" disabled>Renvoyer le code</button>
-      <span id="resendTimer"></span>
-    </div>
-    <div class="timer" id="expTimer"></div>
-    <div class="aes-badge">&#x1F512; Verification OTP — Signature AES conforme eIDAS (UE) n&#xB0;910/2014, Art. 26</div>
-  </div>
-</div>
-<script>
-const DOC_ID = "__DOC_ID__";
-const TOKEN = "__TOKEN__";
-let expireAt = Date.now() + __EXPIRES_IN__ * 1000;
-let resendCooldown = 60;
-let resendInterval;
-
-// Auto-focus and auto-advance digits
-const inputs = [0,1,2,3,4,5].map(i => document.getElementById('d'+i));
-inputs.forEach((inp, i) => {
-  inp.addEventListener('input', e => {
-    const v = e.target.value.replace(/[^0-9]/g,'');
-    e.target.value = v;
-    if(v) {
-      e.target.classList.add('filled');
-      if(i < 5) inputs[i+1].focus();
-      else document.getElementById('btnVerify').focus();
-    } else {
-      e.target.classList.remove('filled');
-    }
-    checkReady();
-  });
-  inp.addEventListener('keydown', e => {
-    if(e.key === 'Backspace' && !e.target.value && i > 0) {
-      inputs[i-1].focus(); inputs[i-1].value=''; inputs[i-1].classList.remove('filled');
-    }
-    if(e.key === 'Enter') verify();
-  });
-  inp.addEventListener('paste', e => {
-    const txt = (e.clipboardData||window.clipboardData).getData('text').replace(/[^0-9]/g,'');
-    if(txt.length >= 6) {
-      e.preventDefault();
-      txt.slice(0,6).split('').forEach((c,j) => { inputs[j].value=c; inputs[j].classList.add('filled'); });
-      checkReady();
-      document.getElementById('btnVerify').focus();
-    }
-  });
-});
-inputs[0].focus();
-
-function getCode() { return inputs.map(i=>i.value).join(''); }
-function checkReady() {
-  document.getElementById('btnVerify').disabled = getCode().length < 6;
-}
-checkReady();
-
-function verify() {
-  const code = getCode();
-  if(code.length < 6) return;
-  document.getElementById('btnVerify').style.display='none';
-  document.getElementById('loading').style.display='block';
-  document.getElementById('errMsg').textContent='';
-  fetch('/esign/'+DOC_ID+'/otp/verify', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({code, token: TOKEN})
-  }).then(r=>r.json()).then(d => {
-    document.getElementById('btnVerify').style.display='block';
-    document.getElementById('loading').style.display='none';
-    if(d.verified) {
-      window.location.href = '/esign/'+DOC_ID+'?token='+TOKEN+'&otp_ok=1';
-    } else if(d.locked) {
-      document.getElementById('errMsg').textContent = 'Trop de tentatives. Reessayez dans 30 minutes.';
-      inputs.forEach(i=>{i.disabled=true;});
-      document.getElementById('btnVerify').disabled=true;
-    } else if(d.expired) {
-      document.getElementById('errMsg').textContent = 'Code expire. Cliquez sur Renvoyer le code.';
-    } else {
-      const left = d.attempts_left !== undefined ? d.attempts_left : '';
-      document.getElementById('errMsg').textContent = 'Code incorrect.' + (left ? ' ' + left + ' tentative(s) restante(s).' : '');
-      inputs.forEach(i=>{i.value='';i.classList.remove('filled');});
-      inputs[0].focus();
-      checkReady();
-    }
-  }).catch(() => {
-    document.getElementById('btnVerify').style.display='block';
-    document.getElementById('loading').style.display='none';
-    document.getElementById('errMsg').textContent = 'Erreur reseau. Reessayez.';
-  });
-}
-
-function resend() {
-  document.getElementById('btnResend').disabled=true;
-  document.getElementById('errMsg').textContent='';
-  fetch('/esign/'+DOC_ID+'/otp/send', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({token: TOKEN})
-  }).then(r=>r.json()).then(d => {
-    if(d.success) {
-      expireAt = Date.now() + (d.expires_in || 600) * 1000;
-      startResendCooldown();
-      inputs.forEach(i=>{i.value='';i.classList.remove('filled');i.disabled=false;});
-      inputs[0].focus();
-      document.getElementById('btnVerify').disabled=true;
-    }
-  });
-}
-
-function startResendCooldown() {
-  resendCooldown = 60;
-  clearInterval(resendInterval);
-  resendInterval = setInterval(() => {
-    resendCooldown--;
-    const el = document.getElementById('resendTimer');
-    if(resendCooldown > 0) {
-      el.textContent = '(disponible dans '+resendCooldown+'s)';
-    } else {
-      el.textContent='';
-      document.getElementById('btnResend').disabled=false;
-      clearInterval(resendInterval);
-    }
-  }, 1000);
-}
-startResendCooldown();
-
-function updateExpTimer() {
-  const remaining = Math.max(0, Math.floor((expireAt - Date.now()) / 1000));
-  const m = Math.floor(remaining / 60), s = remaining % 60;
-  document.getElementById('expTimer').textContent =
-    remaining > 0 ? 'Le code expire dans ' + m + ':' + String(s).padStart(2,'0') : 'Code expire.';
-  if(remaining === 0) clearInterval(expTimerInterval);
-}
-const expTimerInterval = setInterval(updateExpTimer, 1000);
-updateExpTimer();
-</script>
-</body>
-</html>"""
-
-
-def _mask_email(email: str) -> str:
-    """j***@gmail.com style masking."""
-    if "@" not in email:
-        return "****"
-    local, domain = email.split("@", 1)
-    if len(local) <= 1:
-        return f"{local}***@{domain}"
-    return f"{local[0]}***@{domain}"
 
 
 _LABELS = {
@@ -1418,7 +1188,7 @@ _LABELS = {
         "submitting": "Envoi en cours...",
         "prev": "Pr\u00e9c\u00e9dent",
         "next": "Suivant",
-        "success_msg": "Votre <strong>Signature \u00c9lectronique Avanc\u00e9e (AES)</strong> a \u00e9t\u00e9 enregistr\u00e9e avec succ\u00e8s.",
+        "success_msg": "Votre signature a \u00e9t\u00e9 enregistr\u00e9e avec succ\u00e8s.",
         "download": "T\u00e9l\u00e9charger le document sign\u00e9",
         "declined_msg": "Vous avez refus\u00e9 de signer ce document.",
         "req_left": "Champs restants",
@@ -1501,23 +1271,6 @@ def _render_signing_page(doc: dict, token: str = "") -> str:
     lang = doc.get("language", "fr")
     labels = _LABELS.get(lang, _LABELS["en"])
     total_pages = doc.get("total_pages") or 1
-
-    # Detect school mode: if the token belongs to a school_admin signer,
-    # inject student paraphes as read-only overlays and reduce required fields.
-    school_mode = False
-    student_paraphes: dict = {}
-    if token:
-        signer = db.get_signer_by_token(token)
-        if signer and signer.get("role") == "school_admin":
-            school_mode = True
-            for s in db.get_signers_by_document(doc["id"]):
-                if s.get("role") == "student" and s.get("paraphes"):
-                    try:
-                        raw = s["paraphes"] if isinstance(s["paraphes"], dict) else _json.loads(s["paraphes"])
-                        student_paraphes = raw
-                    except Exception:
-                        pass
-
     config = _json.dumps({
         "doc_id": doc["id"],
         "token": token,
@@ -1525,13 +1278,10 @@ def _render_signing_page(doc: dict, token: str = "") -> str:
         "signer_name": doc.get("signer_name", ""),
         "lang": lang,
         "labels": labels,
-        "school_mode": school_mode,
-        "student_paraphes": student_paraphes,
     }, ensure_ascii=False)
     page = _SIGNING_PAGE_TEMPLATE
     page = page.replace("__CONFIG_JSON__", config)
     page = page.replace("__LANG__", lang)
-    page = page.replace("__ESIGN_DOC_ID__", doc.get("id",""))
     return page
 
 
@@ -1750,144 +1500,6 @@ async def esign_create(request: Request) -> JSONResponse:
     })
 
 
-
-async def esign_otp_send(request: Request) -> JSONResponse:
-    """POST /esign/{document_id}/otp/send — generate and send OTP."""
-    import secrets as _sec
-    doc_id = request.path_params["document_id"]
-    doc = db.get_esign_document(doc_id)
-    if not doc:
-        return JSONResponse({"error": "Document not found"}, status_code=404)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    token = body.get("token", "")
-    signer = db.get_signer_by_token(token) if token else None
-    if not signer:
-        return JSONResponse({"error": "Invalid token"}, status_code=401)
-
-    # Check lock status
-    lock = db.is_otp_locked(doc_id, signer["id"])
-    if lock["locked"]:
-        return JSONResponse({"error": "Too many attempts. Try again later.",
-                             "locked_until": lock["locked_until"]}, status_code=429)
-
-    code = str(_sec.randbelow(900000) + 100000)
-    otp = db.create_otp(doc_id, signer["id"], code)
-    db.log_esign_audit(doc_id, "otp_sent", {"signer_id": signer["id"]}, signer_id=signer["id"])
-
-    def _send():
-        try:
-            from tools.esign import _send_otp_email
-            _send_otp_email(signer.get("signer_name", ""), signer.get("signer_email", ""), code)
-        except Exception as e:
-            db.log_esign_audit(doc_id, "otp_send_error", {"error": str(e)})
-
-    threading.Thread(target=_send, daemon=True).start()
-    return JSONResponse({"success": True, "expires_in": 600})
-
-
-async def esign_otp_verify(request: Request) -> JSONResponse:
-    """POST /esign/{document_id}/otp/verify — verify OTP code."""
-    doc_id = request.path_params["document_id"]
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    code = str(body.get("code", "")).strip()
-    token = body.get("token", "")
-    signer = db.get_signer_by_token(token) if token else None
-    if not signer:
-        return JSONResponse({"verified": False, "error": "Invalid token"}, status_code=401)
-
-    # Check lock
-    lock = db.is_otp_locked(doc_id, signer["id"])
-    if lock["locked"]:
-        db.log_esign_audit(doc_id, "otp_locked", {"signer_id": signer["id"]}, signer_id=signer["id"])
-        return JSONResponse({"verified": False, "locked": True,
-                             "locked_until": lock["locked_until"]})
-
-    otp = db.get_active_otp(doc_id, signer["id"])
-    if not otp:
-        # Check if expired
-        return JSONResponse({"verified": False, "expired": True})
-
-    if otp["code"] != code:
-        result = db.increment_otp_attempts(otp["id"], otp["attempts"])
-        db.log_esign_audit(doc_id, "otp_failed",
-                           {"attempts": result["attempts"], "locked": result["locked"]},
-                           signer_id=signer["id"])
-        if result["locked"]:
-            return JSONResponse({"verified": False, "locked": True,
-                                 "locked_until": result["locked_until"]})
-        return JSONResponse({"verified": False,
-                             "attempts_left": max(0, 5 - result["attempts"])})
-
-    # Correct code
-    db.verify_otp(otp["id"], doc_id, signer["id"])
-    db.log_esign_audit(doc_id, "otp_verified", {}, signer_id=signer["id"])
-    return JSONResponse({"verified": True})
-
-
-async def esign_verify(request: Request) -> JSONResponse:
-    """GET /esign/{document_id}/verify — verify PDF integrity."""
-    doc_id = request.path_params["document_id"]
-    doc = db.get_esign_document(doc_id)
-    if not doc:
-        return JSONResponse({"error": "Document not found"}, status_code=404)
-
-    signers_info = db.get_signers_by_document(doc_id)
-    signed_pdf = doc.get("signed_pdf_path", "")
-
-    try:
-        from tools.esign import verify_signed_pdf
-        integrity = verify_signed_pdf(signed_pdf) if signed_pdf else {"integrity": "unsigned"}
-    except Exception as e:
-        integrity = {"integrity": "unknown", "error": str(e)}
-
-    # Load cert info
-    cert_info = {}
-    try:
-        import subprocess as _sp
-        r = _sp.run(
-            ["openssl", "x509", "-noout", "-subject", "-dates",
-             "-in", "/opt/clawshow-data/certs/esign-cert.pem"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if r.returncode == 0:
-            lines = r.stdout.strip().splitlines()
-            cert_info = {"raw": " | ".join(lines)}
-    except Exception:
-        pass
-
-    return JSONResponse({
-        "document_id": doc_id,
-        "status": doc.get("status"),
-        "integrity": integrity.get("integrity", "unknown"),
-        "signed_by": integrity.get("signed_by") or "ClawShow eSign Platform",
-        "signed_at": integrity.get("signed_at"),
-        "certificate": {
-            "issuer": "ClawShow eSign",
-            "algorithm": "SHA-256 with RSA",
-            **cert_info,
-        },
-        "signers": [
-            {
-                "name": s.get("signer_name"),
-                "role": s.get("role"),
-                "email": s.get("signer_email"),
-                "signed_at": s.get("signed_at"),
-                "otp_verified": bool(s.get("otp_verified_at")),
-            }
-            for s in signers_info
-        ],
-    })
-
-
 async def esign_signing_page(request: Request):
     """GET /esign/{document_id}[?token=UUID] — serve the V2 multi-page signing page."""
     from starlette.responses import HTMLResponse
@@ -1904,72 +1516,12 @@ async def esign_signing_page(request: Request):
     if doc["status"] == "declined":
         return HTMLResponse("<h2 style='font-family:Arial;padding:40px'>Ce document a été refusé.</h2>")
 
-    # If no token: redirect to token-bearing URL (creates signer for V1 docs)
-    if not token:
-        from starlette.responses import RedirectResponse as _Redir
-        import uuid as _uuid
-        signers_list = db.get_signers_by_document(doc_id)
-        if signers_list:
-            # Redirect to first pending/signing signer's token
-            first_s = next((s for s in signers_list if s.get("status") in ("pending", "signing")), signers_list[0])
-            return _Redir(f"/esign/{doc_id}?token={first_s['token']}", status_code=302)
-        else:
-            # V1 doc with no signer records — create one and redirect
-            new_token = str(_uuid.uuid4())
-            db.create_esign_signer(
-                document_id=doc_id, role="student",
-                signer_name=doc.get("signer_name", ""), signer_email=doc.get("signer_email", ""),
-                signing_order=1, token=new_token,
-            )
-            with db.get_conn() as _c:
-                _c.execute("UPDATE esign_documents SET signing_url=? WHERE id=?",
-                           (f"{MCP_BASE_URL}/esign/{doc_id}?token={new_token}", doc_id))
-            return _Redir(f"/esign/{doc_id}?token={new_token}", status_code=302)
-
-    # Validate token and check OTP verification
+    # Validate token if provided
     if token:
         signer = db.get_signer_by_token(token)
         if signer:
             db.mark_signer_viewed(signer["id"])
             db.log_esign_audit(doc_id, "viewed", {"signer_role": signer["role"]}, signer_id=signer["id"])
-
-            # OTP gate: skip if otp_ok param present (just verified) or already verified
-            otp_ok = request.query_params.get("otp_ok", "")
-            already_verified = db.is_otp_verified(doc_id, signer["id"])
-
-            if not already_verified and not otp_ok:
-                # Send OTP if no pending one exists
-                active_otp = db.get_active_otp(doc_id, signer["id"])
-                if not active_otp:
-                    import secrets as _sec
-                    code = str(_sec.randbelow(900000) + 100000)
-                    db.create_otp(doc_id, signer["id"], code)
-                    db.log_esign_audit(doc_id, "otp_sent", {}, signer_id=signer["id"])
-                    def _send_otp_bg(n=signer.get("signer_name",""), e=signer.get("signer_email",""), c=code):
-                        try:
-                            from tools.esign import _send_otp_email
-                            _send_otp_email(n, e, c)
-                        except Exception:
-                            pass
-                    threading.Thread(target=_send_otp_bg, daemon=True).start()
-
-                masked = _mask_email(signer.get("signer_email", ""))
-                active = db.get_active_otp(doc_id, signer["id"])
-                expires_in = 600
-                if active:
-                    from datetime import datetime as _dt, timezone as _tz
-                    try:
-                        exp = _dt.fromisoformat(active["expires_at"].replace("Z", "+00:00"))
-                        expires_in = max(0, int((exp - _dt.now(_tz.utc)).total_seconds()))
-                    except Exception:
-                        pass
-
-                otp_page = _OTP_PAGE_TEMPLATE
-                otp_page = otp_page.replace("__DOC_ID__", doc_id)
-                otp_page = otp_page.replace("__TOKEN__", token)
-                otp_page = otp_page.replace("__MASKED_EMAIL__", masked)
-                otp_page = otp_page.replace("__EXPIRES_IN__", str(expires_in))
-                return HTMLResponse(otp_page)
 
     page_html = _render_signing_page(doc, token)
     return HTMLResponse(page_html)
@@ -2006,9 +1558,8 @@ async def esign_signed_pdf(request: Request):
 
 
 async def esign_submit_signature(request: Request) -> JSONResponse:
-    """POST /esign/{document_id}/sign — role-aware 3-path handler (AES V2)."""
+    """POST /esign/{document_id}/sign — receive paraphes + final signature, generate signed PDF."""
     import base64 as _b64
-    import json as _json
     doc_id = request.path_params["document_id"]
     doc = db.get_esign_document(doc_id)
     if not doc:
@@ -2025,7 +1576,7 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
     sig_data_url = body.get("signature_png", "")
     lu_data_url = body.get("lu_approuve_png", "")
     city = body.get("city", "Paris") or "Paris"
-    paraphes_raw = body.get("paraphes", {})
+    paraphes_raw = body.get("paraphes", {})  # {page_num_str: dataURL}
 
     if not sig_data_url or not sig_data_url.startswith("data:image/png;base64,"):
         return JSONResponse({"error": "Missing or invalid signature_png"}, status_code=400)
@@ -2035,6 +1586,7 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
     if lu_data_url and lu_data_url.startswith("data:image/png;base64,"):
         lu_bytes = _b64.b64decode(lu_data_url.split(",", 1)[1])
 
+    # Decode paraphes dict {page_num_int: bytes}
     paraphes_bytes: dict = {}
     for pg_str, data_url in paraphes_raw.items():
         if data_url and data_url.startswith("data:image/png;base64,"):
@@ -2051,332 +1603,100 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
     if not original_pdf or not Path(original_pdf).exists():
         return JSONResponse({"error": "Source PDF not found"}, status_code=500)
 
-    # Determine signer role
-    signer = None
-    signer_role = "student"
-    if token:
-        signer = db.get_signer_by_token(token)
-        if signer:
-            signer_role = signer.get("role", "student")
-
-    def _complete_with_digital_sig(unsigned_pdf: str, doc_id: str, signers_info: list) -> str:
-        """Apply pyhanko digital signature after visual overlay."""
-        try:
-            from tools.esign import digitally_sign_pdf
-            ds_pdf = unsigned_pdf.replace("-unsigned.pdf", "-signed.pdf")
-            result = digitally_sign_pdf(unsigned_pdf, ds_pdf, doc_id, signers_info)
-            return result  # returns ds_pdf on success, unsigned_pdf on failure
-        except Exception:
-            return unsigned_pdf
-
-    def _upload_signed_pdf_to_s3(signed_pdf: str, namespace: str, doc_id: str) -> str:
-        """Upload signed PDF to S3. Returns HTTPS URL or empty string on failure."""
-        try:
-            import boto3 as _boto3
-            bucket = os.environ.get("AWS_S3_BUCKET", "focusingpro")
-            region = os.environ.get("AWS_REGION", "eu-west-3")
-            key = f"{namespace}/esign/{doc_id}-signed.pdf"
-            s3 = _boto3.client(
-                "s3",
-                region_name=region,
-                aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-            )
-            s3.upload_file(signed_pdf, bucket, key, ExtraArgs={"ContentType": "application/pdf"})
-            return f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
-        except Exception as exc:
-            db.log_esign_audit(doc_id, "s3_upload_error", {"error": str(exc)})
-            return ""
-
-    def _next_day_morning(dt_str: str) -> str:
-        """Return next calendar day at 09:00 as YYYY-MM-DD HH:MM:SS."""
-        try:
-            from datetime import datetime as _dt, timedelta as _td
-            d = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
-            nxt = (d + _td(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
-            return nxt.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return dt_str
-
-    def _fmt_dt(dt_str: str) -> str:
-        """Format ISO datetime as YYYY-MM-DD HH:MM:SS."""
-        try:
-            from datetime import datetime as _dt
-            d = _dt.fromisoformat(dt_str.replace("Z", "+00:00"))
-            return d.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return dt_str
-
-    # ── PATH A: School admin counter-signs ──────────────────────────────────
-    if signer_role == "school_admin":
-        if signer:
-            db.update_signer_signed(
-                signer_id=signer["id"], signer_ip=signer_ip,
-                signature_png=sig_data_url, lu_approuve_png=lu_data_url,
-                paraphes={}, city=city,
-            )
-
-        student_paraphes_bytes: dict = {}
-        student_sig_bytes = b""
-        student_lu_bytes = b""
-        student_city = "Paris"
-        student_name = doc.get("signer_name", "")
-        student_signer_ip = signer_ip
-        student_signed_at = signed_at
-
-        all_signers = db.get_signers_by_document(doc_id)
-        for s in all_signers:
-            if s.get("role") == "student":
-                student_name = s.get("signer_name") or student_name
-                student_city = s.get("city") or student_city
-                student_signer_ip = s.get("signer_ip") or student_signer_ip
-                student_signed_at = s.get("signed_at") or student_signed_at
-                raw_par = s.get("paraphes")
-                if raw_par:
-                    try:
-                        par_dict = raw_par if isinstance(raw_par, dict) else _json.loads(raw_par)
-                        for pg_str, data_url in par_dict.items():
-                            if data_url and data_url.startswith("data:image/png;base64,"):
-                                student_paraphes_bytes[int(pg_str)] = _b64.b64decode(data_url.split(",", 1)[1])
-                    except Exception:
-                        pass
-                raw_sig = s.get("signature_png")
-                if raw_sig and raw_sig.startswith("data:image/png;base64,"):
-                    student_sig_bytes = _b64.b64decode(raw_sig.split(",", 1)[1])
-                raw_lu = s.get("lu_approuve_png")
-                if raw_lu and raw_lu.startswith("data:image/png;base64,"):
-                    student_lu_bytes = _b64.b64decode(raw_lu.split(",", 1)[1])
-                break
-
-        school_signer_name = signer.get("signer_name") if signer else ""
-        unsigned_pdf = str(ESIGN_DATA_DIR / namespace / f"{doc_id}-unsigned.pdf")
-        try:
-            from tools.esign import _overlay_signatures_pdf
-            _overlay_signatures_pdf(
-                original_pdf, unsigned_pdf,
-                paraphes=student_paraphes_bytes,
-                final_sig={
-                    "sig_bytes": student_sig_bytes, "lu_bytes": student_lu_bytes,
-                    "city": student_city, "signer_name": student_name,
-                    "signed_at": student_signed_at, "signer_ip": student_signer_ip,
-                    "doc_id": doc_id,
-                },
-                school_sig={
-                    "sig_bytes": sig_bytes, "city": city,
-                    "signer_name": school_signer_name, "signed_at": signed_at,
-                },
-            )
-        except Exception as e:
-            return JSONResponse({"error": f"PDF overlay failed: {e}"}, status_code=500)
-
-        # Apply digital signature (AES)
-        signed_pdf = _complete_with_digital_sig(unsigned_pdf, doc_id, all_signers)
-
-        _s3_url_a = _upload_signed_pdf_to_s3(signed_pdf, namespace, doc_id)
-        if _s3_url_a:
-            db.update_esign_s3_url(doc_id, _s3_url_a)
-
-        db.complete_esign_document(doc_id, signed_pdf, signer_ip, city=city, lu_approuve="lu et approuve")
-        db.log_esign_audit(doc_id, "school_signed", {
-            "city": city, "signer_ip": signer_ip, "school_signer": school_signer_name,
-            "s3_url": _s3_url_a,
-        }, signer_id=signer["id"] if signer else None)
-
-        signed_pdf_url = f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf"
-        student_email = ""
-        school_email = signer.get("signer_email", "") if signer else ""
-        for s in all_signers:
-            if s.get("role") == "student":
-                student_email = s.get("signer_email", "")
-                break
-
-        def _send_completion_emails():
-            try:
-                from tools.esign import _send_completion_email
-                if student_email:
-                    _send_completion_email(student_name, student_email, doc_id, signed_pdf_url)
-                if school_email and school_email != student_email:
-                    _send_completion_email(school_signer_name, school_email, doc_id, signed_pdf_url)
-            except Exception as exc:
-                db.log_esign_audit(doc_id, "completion_email_error", {"error": str(exc)})
-
-        threading.Thread(target=_send_completion_emails, daemon=True).start()
-
-        callback_url = doc.get("callback_url", "")
-        if callback_url:
-            def _fire_completed(_s3=_s3_url_a, _sat=signed_at):
-                import requests as _r
-                payload = {
-                    "event": "document.completed", "provider": "clawshow_esign",
-                    "document_id": doc_id, "reference_id": doc.get("reference_id", ""),
-                    "namespace": namespace, "status": "completed",
-                    "signed_pdf_url": signed_pdf_url,
-                    "s3_url": _s3,
-                    "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit",
-                    "completed_at": _sat,
-                    "focusingpro_fields": {
-                        "b5bad4feeac241fda92998b1ea2bc269": "Contrat de signature terminé",
-                        "f90c66d8eca243529ad4ccf2f1e66a8e": _fmt_dt(_sat),
-                        "f4af5a376e5148e19971d2045ece2704": _next_day_morning(_sat),
-                        "271a401fde6d4d2195c15724c6f39553": _s3,
-                    },
-                }
-                hdrs = {"Content-Type": "application/json",
-                        "X-ClawShow-Event": "document.completed",
-                        "X-ClawShow-Document-Id": doc_id, "X-ClawShow-Timestamp": _sat}
-                for attempt in range(3):
-                    try:
-                        resp = _r.post(callback_url, json=payload, headers=hdrs, timeout=10)
-                        if resp.status_code == 200:
-                            return
-                    except Exception:
-                        pass
-                    import time; time.sleep(2 ** attempt)
-            threading.Thread(target=_fire_completed, daemon=True).start()
-
-        return JSONResponse({
-            "success": True, "document_id": doc_id,
-            "signed_pdf_url": signed_pdf_url, "s3_url": _s3_url_a, "signed_at": signed_at,
-        })
-
-    # ── Check for school_admin co-signer ────────────────────────────────────
-    all_signers = db.get_signers_by_document(doc_id)
-    has_school_admin = any(s.get("role") == "school_admin" for s in all_signers)
-
-    # ── PATH B: Student signs, school admin exists ───────────────────────────
-    if has_school_admin:
-        if signer:
-            db.update_signer_signed(
-                signer_id=signer["id"], signer_ip=signer_ip,
-                signature_png=sig_data_url, lu_approuve_png=lu_data_url,
-                paraphes={k: v for k, v in paraphes_raw.items()}, city=city,
-            )
-
-        db.update_document_status(doc_id, "student_signed")
-        db.log_esign_audit(doc_id, "student_signed", {
-            "city": city, "pages_paraphed": list(paraphes_bytes.keys()), "signer_ip": signer_ip,
-        }, signer_id=signer["id"] if signer else None)
-
-        school_signer = next((s for s in all_signers if s.get("role") == "school_admin"), None)
-        school_signing_url = ""
-        if school_signer and school_signer.get("token"):
-            school_signing_url = f"{MCP_BASE_URL}/esign/{doc_id}?token={school_signer['token']}"
-
-        def _notify_school():
-            try:
-                from tools.esign import _send_school_notification_email
-                school_email = school_signer.get("signer_email", "") if school_signer else ""
-                school_name = school_signer.get("signer_name", "Administration") if school_signer else "Administration"
-                student_name_val = signer.get("signer_name", doc.get("signer_name", "")) if signer else doc.get("signer_name", "")
-                if school_email:
-                    _send_school_notification_email(student_name_val, school_email, school_name,
-                                                    school_signing_url, doc_id)
-            except Exception as exc:
-                db.log_esign_audit(doc_id, "school_notification_error", {"error": str(exc)})
-
-        threading.Thread(target=_notify_school, daemon=True).start()
-
-        callback_url = doc.get("callback_url", "")
-        if callback_url:
-            student_name_wh = signer.get("signer_name", doc.get("signer_name", "")) if signer else doc.get("signer_name", "")
-            def _fire_student_signed():
-                import requests as _r
-                payload = {"event": "signer.signed", "provider": "clawshow_esign",
-                           "document_id": doc_id, "reference_id": doc.get("reference_id", ""),
-                           "namespace": namespace, "status": "student_signed",
-                           "signer": {"role": "student", "name": student_name_wh,
-                                      "email": signer.get("signer_email", "") if signer else "",
-                                      "signed_at": signed_at, "ip": signer_ip},
-                           "school_signing_url": school_signing_url,
-                           "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit"}
-                hdrs = {"Content-Type": "application/json", "X-ClawShow-Event": "signer.signed",
-                        "X-ClawShow-Document-Id": doc_id, "X-ClawShow-Timestamp": signed_at}
-                for attempt in range(3):
-                    try:
-                        resp = _r.post(callback_url, json=payload, headers=hdrs, timeout=10)
-                        if resp.status_code == 200:
-                            return
-                    except Exception:
-                        pass
-                    import time; time.sleep(2 ** attempt)
-            threading.Thread(target=_fire_student_signed, daemon=True).start()
-
-        return JSONResponse({
-            "success": True, "document_id": doc_id, "status": "student_signed",
-            "school_signing_url": school_signing_url, "signed_at": signed_at,
-        })
-
-    # ── PATH C: Single-signer — generate PDF and complete ───────────────────
-    unsigned_pdf = str(ESIGN_DATA_DIR / namespace / f"{doc_id}-unsigned.pdf")
+    signed_pdf = str(ESIGN_DATA_DIR / namespace / f"{doc_id}-signed.pdf")
     try:
         from tools.esign import _overlay_signatures_pdf
         _overlay_signatures_pdf(
-            original_pdf, unsigned_pdf, paraphes=paraphes_bytes,
+            original_pdf,
+            signed_pdf,
+            paraphes=paraphes_bytes,
             final_sig={
-                "sig_bytes": sig_bytes, "lu_bytes": lu_bytes, "city": city,
-                "signer_name": doc["signer_name"], "signed_at": signed_at,
-                "signer_ip": signer_ip, "doc_id": doc_id,
+                "sig_bytes": sig_bytes,
+                "lu_bytes": lu_bytes,
+                "city": city,
+                "signer_name": doc["signer_name"],
+                "signed_at": signed_at,
+                "signer_ip": signer_ip,
             },
         )
     except Exception as e:
         return JSONResponse({"error": f"PDF signing failed: {e}"}, status_code=500)
 
-    all_signers_c = db.get_signers_by_document(doc_id)
-    signed_pdf = _complete_with_digital_sig(unsigned_pdf, doc_id, all_signers_c)
+    # Update signer record if token provided
+    signer_id = None
+    if token:
+        signer = db.get_signer_by_token(token)
+        if signer:
+            signer_id = signer["id"]
+            db.update_signer_signed(
+                signer_id=signer_id,
+                signer_ip=signer_ip,
+                signature_png=sig_data_url,
+                lu_approuve_png=lu_data_url,
+                paraphes={k: v for k, v in paraphes_raw.items()},
+                city=city,
+            )
 
-    if signer:
-        db.update_signer_signed(
-            signer_id=signer["id"], signer_ip=signer_ip,
-            signature_png=sig_data_url, lu_approuve_png=lu_data_url,
-            paraphes={k: v for k, v in paraphes_raw.items()}, city=city,
-        )
-
-    _s3_url_c = _upload_signed_pdf_to_s3(signed_pdf, namespace, doc_id)
-    if _s3_url_c:
-        db.update_esign_s3_url(doc_id, _s3_url_c)
-
-    db.complete_esign_document(doc_id, signed_pdf, signer_ip, city=city, lu_approuve="lu et approuve")
+    db.complete_esign_document(doc_id, signed_pdf, signer_ip, city=city, lu_approuve="lu et approuvé")
     db.log_esign_audit(doc_id, "signed", {
-        "city": city, "pages_paraphed": list(paraphes_bytes.keys()), "signer_ip": signer_ip,
-        "s3_url": _s3_url_c,
-    }, signer_id=signer["id"] if signer else None)
+        "city": city,
+        "pages_paraphed": list(paraphes_bytes.keys()),
+        "signer_ip": signer_ip,
+    }, signer_id=signer_id)
 
     signed_pdf_url = f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf"
 
     callback_url = doc.get("callback_url", "")
     if callback_url:
-        def _fire_callback(_s3=_s3_url_c, _sat=signed_at):
+        signers_info = db.get_signers_by_document(doc_id)
+
+        def _fire_callback():
             import requests as _r
             payload = {
-                "event": "document.completed", "provider": "clawshow_esign",
-                "document_id": doc_id, "reference_id": doc.get("reference_id", ""),
-                "namespace": namespace, "status": "completed",
-                "signed_pdf_url": signed_pdf_url,
-                "s3_url": _s3,
-                "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit",
-                "completed_at": _sat,
-                "focusingpro_fields": {
-                    "b5bad4feeac241fda92998b1ea2bc269": "Contrat de signature terminé",
-                    "f90c66d8eca243529ad4ccf2f1e66a8e": _fmt_dt(_sat),
-                    "f4af5a376e5148e19971d2045ece2704": _next_day_morning(_sat),
-                    "271a401fde6d4d2195c15724c6f39553": _s3,
+                "event": "signer.signed",
+                "provider": "clawshow_esign",
+                "document_id": doc_id,
+                "reference_id": doc.get("reference_id", ""),
+                "namespace": doc.get("namespace", ""),
+                "status": "student_signed",
+                "signer": {
+                    "role": "student",
+                    "name": doc["signer_name"],
+                    "email": doc.get("signer_email", ""),
+                    "signed_at": signed_at,
+                    "ip": signer_ip,
                 },
+                "signed_pdf_url": signed_pdf_url,
+                "audit_url": f"{MCP_BASE_URL}/esign/{doc_id}/audit",
             }
-            hdrs = {"Content-Type": "application/json", "X-ClawShow-Event": "document.completed",
-                    "X-ClawShow-Document-Id": doc_id, "X-ClawShow-Timestamp": _sat}
+            hdrs = {
+                "Content-Type": "application/json",
+                "X-ClawShow-Event": "signer.signed",
+                "X-ClawShow-Document-Id": doc_id,
+                "X-ClawShow-Timestamp": signed_at,
+            }
             for attempt in range(3):
                 try:
                     resp = _r.post(callback_url, json=payload, headers=hdrs, timeout=10)
+                    db.log_esign_audit(doc_id, "webhook_sent" if resp.status_code == 200 else "webhook_failed", {
+                        "event": "signer.signed", "attempt": attempt + 1, "status": resp.status_code,
+                    })
                     if resp.status_code == 200:
                         return
-                except Exception:
-                    pass
-                import time; time.sleep(2 ** attempt)
+                except Exception as exc:
+                    db.log_esign_audit(doc_id, "webhook_error", {
+                        "event": "signer.signed", "attempt": attempt + 1, "error": str(exc),
+                    })
+                import time
+                time.sleep(2 ** attempt)  # exponential backoff: 1s, 2s, 4s
+
         threading.Thread(target=_fire_callback, daemon=True).start()
 
     return JSONResponse({
-        "success": True, "document_id": doc_id,
-        "signed_pdf_url": signed_pdf_url, "s3_url": _s3_url_c, "signed_at": signed_at,
+        "success": True,
+        "document_id": doc_id,
+        "signed_pdf_url": signed_pdf_url,
+        "signed_at": signed_at,
     })
 
 
@@ -2427,7 +1747,6 @@ async def esign_status(request: Request) -> JSONResponse:
         "city": doc.get("city"),
         "reference_id": doc.get("reference_id", ""),
         "signed_pdf_url": f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf" if doc["status"] == "completed" else None,
-        "s3_url": doc.get("s3_url") or None,
         "created_at": doc.get("created_at"),
         "signers": [
             {
@@ -2474,6 +1793,327 @@ async def esign_audit(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Dragons Elysées 龙城酒楼 — API endpoints
+# ---------------------------------------------------------------------------
+
+import hmac as _hmac
+import hashlib as _hashlib
+import random as _random
+import string as _string
+import base64 as _b64
+
+try:
+    import tools.dragons_elysees_db as _de_db
+    _de_db.init_tables()
+    logger.info("Dragons Elysées DB initialized")
+except Exception as _de_init_err:
+    logger.error(f"Dragons Elysées DB init failed: {_de_init_err}")
+    _de_db = None  # type: ignore
+
+_DE_JWT_SECRET = os.environ.get("DRAGONS_JWT_SECRET", "dragons-elysees-default-secret-change-me")
+_DE_GMAIL_USER = os.environ.get("DRAGONS_GMAIL_USER", os.environ.get("GMAIL_USER", ""))
+_DE_GMAIL_PASS = os.environ.get("DRAGONS_GMAIL_APP_PASSWORD", os.environ.get("GMAIL_APP_PASSWORD", ""))
+
+
+def _de_create_token(customer_id: int, email: str) -> str:
+    """Create a signed JWT (HS256) without external dependencies."""
+    import time as _time
+    import json as _j
+    header = _b64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b"=").decode()
+    payload = _b64.urlsafe_b64encode(
+        _j.dumps({"customer_id": customer_id, "email": email, "iat": int(_time.time())}).encode()
+    ).rstrip(b"=").decode()
+    unsigned = f"{header}.{payload}"
+    sig = _hmac.new(_DE_JWT_SECRET.encode(), unsigned.encode(), _hashlib.sha256).digest()
+    sig_b64 = _b64.urlsafe_b64encode(sig).rstrip(b"=").decode()
+    return f"{unsigned}.{sig_b64}"
+
+
+def _de_verify_token(token: str) -> dict | None:
+    """Verify HS256 JWT and return payload dict, or None if invalid."""
+    import json as _j
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        header, payload_b64, sig = parts
+        unsigned = f"{header}.{payload_b64}"
+        expected = _hmac.new(_DE_JWT_SECRET.encode(), unsigned.encode(), _hashlib.sha256).digest()
+        expected_b64 = _b64.urlsafe_b64encode(expected).rstrip(b"=").decode()
+        if not _hmac.compare_digest(sig, expected_b64):
+            return None
+        padding = (4 - len(payload_b64) % 4) % 4
+        return _j.loads(_b64.urlsafe_b64decode(payload_b64 + "=" * padding))
+    except Exception:
+        return None
+
+
+def _de_get_customer_from_request(request: Request) -> dict | None:
+    """Extract and verify Bearer token, return payload or None."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    return _de_verify_token(auth[7:])
+
+
+def _de_send_otp_email(email: str, code: str) -> None:
+    """Send OTP code via Gmail SMTP (runs in background thread)."""
+    if not _DE_GMAIL_USER or not _DE_GMAIL_PASS:
+        logger.warning("Dragons Elysées: Gmail not configured, skipping OTP email")
+        return
+    try:
+        text = (
+            f"Bonjour,\n\n"
+            f"Votre code de connexion : {code}\n\n"
+            f"Ce code expire dans 10 minutes.\n\n"
+            f"Dragons Elysées 龙城酒楼\n"
+            f"11 Rue de Berri, 75008 Paris"
+        )
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "Dragons Elysées - Votre code de connexion"
+        msg["From"] = f"Dragons Elysées <{_DE_GMAIL_USER}>"
+        msg["To"] = email
+        msg.attach(MIMEText(text, "plain", "utf-8"))
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as srv:
+            srv.login(_DE_GMAIL_USER, _DE_GMAIL_PASS)
+            srv.send_message(msg)
+        logger.info(f"Dragons OTP sent to {email}")
+    except Exception:
+        logger.exception("Failed to send Dragons OTP email")
+
+
+# ── Auth endpoints ──
+
+async def de_send_otp(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/auth/send-otp"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    email = data.get("email", "").strip().lower()
+    if not email:
+        return JSONResponse({"error": "email required"}, status_code=400)
+    code = "".join(_random.choices(_string.digits, k=6))
+    _de_db.save_otp(email, code)
+    threading.Thread(target=_de_send_otp_email, args=(email, code), daemon=True).start()
+    return JSONResponse({"success": True, "message": "Code envoyé"})
+
+
+async def de_verify_otp(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/auth/verify-otp"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    email = data.get("email", "").strip().lower()
+    code = data.get("code", "").strip()
+    if not email or not code:
+        return JSONResponse({"error": "email and code required"}, status_code=400)
+    if not _de_db.verify_and_consume_otp(email, code):
+        return JSONResponse({"error": "Code invalide ou expiré"}, status_code=401)
+    customer = _de_db.get_or_create_customer(email)
+    token = _de_create_token(customer["id"], email)
+    bal = _de_db.get_balance(customer["id"])
+    return JSONResponse({
+        "success": True,
+        "token": token,
+        "customer": {
+            "id": customer["id"],
+            "email": customer["email"],
+            "name": customer.get("name"),
+            "balance": bal["balance"],
+        },
+    })
+
+
+async def de_me(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/auth/me"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    payload = _de_get_customer_from_request(request)
+    if not payload:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    customer = _de_db.get_customer_by_id(payload["customer_id"])
+    if not customer:
+        return JSONResponse({"error": "Customer not found"}, status_code=404)
+    bal = _de_db.get_balance(payload["customer_id"])
+    return JSONResponse({
+        "id": customer["id"],
+        "email": customer["email"],
+        "name": customer.get("name"),
+        "balance": bal["balance"],
+    })
+
+
+# ── Order endpoints ──
+
+async def de_create_order(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/orders"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    order = _de_db.create_order(data)
+    if not order:
+        return JSONResponse({"error": "Failed to create order"}, status_code=500)
+    return JSONResponse(order, status_code=201)
+
+
+async def de_get_orders(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/orders"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    status = request.query_params.get("status", "")
+    date = request.query_params.get("date", "")
+    cid_str = request.query_params.get("customer_id", "")
+    customer_id = int(cid_str) if cid_str.isdigit() else None
+    orders = _de_db.query_orders(status=status, date=date, customer_id=customer_id)
+    return JSONResponse({"orders": orders, "total": len(orders)})
+
+
+async def de_get_order(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/orders/{id}"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    order_id = int(request.path_params["id"])
+    order = _de_db.get_order_by_id(order_id)
+    if not order:
+        return JSONResponse({"error": "Order not found"}, status_code=404)
+    return JSONResponse(order)
+
+
+async def de_update_order(request: Request) -> JSONResponse:
+    """PATCH /api/dragons-elysees/orders/{id}"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    order_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    new_status = data.get("status", "")
+    if not new_status:
+        return JSONResponse({"error": "status required"}, status_code=400)
+    old_order = _de_db.get_order_by_id(order_id)
+    if not old_order:
+        return JSONResponse({"error": "Order not found"}, status_code=404)
+    order = _de_db.update_order_status(order_id, new_status)
+    if new_status == "paid" and old_order.get("status") != "paid":
+        _de_db.apply_cashback(order_id)
+        order = _de_db.get_order_by_id(order_id)
+    return JSONResponse(order)
+
+
+# ── Balance endpoints ──
+
+async def de_get_balance(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/balance"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    payload = _de_get_customer_from_request(request)
+    if not payload:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse(_de_db.get_balance(payload["customer_id"]))
+
+
+async def de_get_transactions(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/balance/transactions"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    payload = _de_get_customer_from_request(request)
+    if not payload:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    limit = int(request.query_params.get("limit", "20"))
+    offset = int(request.query_params.get("offset", "0"))
+    return JSONResponse(_de_db.get_transactions(payload["customer_id"], limit=limit, offset=offset))
+
+
+# ── Payment endpoints ──
+
+async def de_payment_create(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/payment/create"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    order_id = data.get("order_id")
+    amount = data.get("amount", 0)
+    return_url = data.get("return_url", "")
+    if not order_id or not amount:
+        return JSONResponse({"error": "order_id and amount required"}, status_code=400)
+    order = _de_db.get_order_by_id(int(order_id))
+    if not order:
+        return JSONResponse({"error": "Order not found"}, status_code=404)
+    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+    if not stancer_key or stancer_key.startswith("stest_your"):
+        return JSONResponse({"error": "Stancer not configured"}, status_code=500)
+    auth = _b64.b64encode(f"{stancer_key}:".encode()).decode()
+    amount_cents = int(float(amount) * 100)
+    if not return_url:
+        return_url = (
+            f"https://jason2016.github.io/dragons-elysees/"
+            f"#/payment-success?order={order['order_number']}"
+        )
+    try:
+        resp = _req_lib.post(
+            "https://api.stancer.com/v2/payment_intents/",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json={
+                "amount": amount_cents,
+                "currency": "eur",
+                "description": f"Dragons Elysées - {order['order_number']}",
+                "return_url": return_url,
+            },
+            timeout=15,
+        )
+        result = resp.json()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    if resp.status_code not in (200, 201):
+        return JSONResponse(
+            {"error": result.get("error", f"Stancer error {resp.status_code}")},
+            status_code=502,
+        )
+    payment_id = result.get("id", "")
+    payment_url = result.get("url", "")
+    if not payment_url:
+        return JSONResponse({"error": "No payment URL from Stancer"}, status_code=502)
+    _de_db.update_order_payment(int(order_id), payment_id, "stancer")
+    return JSONResponse({"payment_url": payment_url, "payment_id": payment_id})
+
+
+async def de_payment_webhook(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/payment/webhook"""
+    if _de_db is None:
+        return JSONResponse({"received": True})
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"received": True})
+    payment_id = data.get("payment_id", "")
+    status = data.get("status", "")
+    if not payment_id:
+        return JSONResponse({"received": True})
+    order = _de_db.get_order_by_payment_id(payment_id)
+    if not order:
+        return JSONResponse({"received": True})
+    paid_statuses = {"paid", "succeeded", "captured", "to_capture", "authorized"}
+    if status in paid_statuses and order.get("status") != "paid":
+        _de_db.update_order_status(order["id"], "paid")
+        _de_db.apply_cashback(order["id"])
+    return JSONResponse({"received": True})
+
+
+# ---------------------------------------------------------------------------
 # Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
 
@@ -2501,13 +2141,22 @@ def _build_app() -> Starlette:
             Route("/esign/{document_id}/sign", esign_submit_signature, methods=["POST"]),
             Route("/esign/{document_id}/decline", esign_decline, methods=["POST"]),
             Route("/esign/{document_id}/status", esign_status, methods=["GET"]),
-            Route("/esign/{document_id}/otp/send", esign_otp_send, methods=["POST"]),
-            Route("/esign/{document_id}/otp/verify", esign_otp_verify, methods=["POST"]),
-            Route("/esign/{document_id}/verify", esign_verify, methods=["GET"]),
             Route("/esign/{document_id}/audit", esign_audit, methods=["GET"]),
             Route("/esign/{document_id}/preview.pdf", esign_preview_pdf, methods=["GET"]),
             Route("/esign/{document_id}/signed.pdf", esign_signed_pdf, methods=["GET"]),
             Route("/esign/{document_id}", esign_signing_page, methods=["GET"]),
+            # Dragons Elysées 龙城酒楼
+            Route("/api/dragons-elysees/auth/send-otp", de_send_otp, methods=["POST"]),
+            Route("/api/dragons-elysees/auth/verify-otp", de_verify_otp, methods=["POST"]),
+            Route("/api/dragons-elysees/auth/me", de_me, methods=["GET"]),
+            Route("/api/dragons-elysees/orders", de_get_orders, methods=["GET"]),
+            Route("/api/dragons-elysees/orders", de_create_order, methods=["POST"]),
+            Route("/api/dragons-elysees/orders/{id:int}", de_get_order, methods=["GET"]),
+            Route("/api/dragons-elysees/orders/{id:int}", de_update_order, methods=["PATCH"]),
+            Route("/api/dragons-elysees/balance/transactions", de_get_transactions, methods=["GET"]),
+            Route("/api/dragons-elysees/balance", de_get_balance, methods=["GET"]),
+            Route("/api/dragons-elysees/payment/create", de_payment_create, methods=["POST"]),
+            Route("/api/dragons-elysees/payment/webhook", de_payment_webhook, methods=["POST"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
