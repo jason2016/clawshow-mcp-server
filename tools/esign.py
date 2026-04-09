@@ -170,7 +170,31 @@ def _generate_pdf(doc_id: str, namespace: str, template: str, signer_name: str, 
     Path(html_path).write_text(rendered_html, encoding="utf-8")
     _html_to_pdf(rendered_html, pdf_path)
 
-    return html_path, pdf_path
+    try:
+        import fitz as _fitz
+        doc = _fitz.open(pdf_path)
+        total_pages = len(doc)
+        doc.close()
+    except Exception:
+        total_pages = 1
+
+    return html_path, pdf_path, total_pages
+
+
+def _generate_page_images(pdf_path: str, pages_dir: str) -> int:
+    """Render each page of a PDF as a PNG. Returns total page count."""
+    import fitz as _fitz
+    import os as _os
+
+    _os.makedirs(pages_dir, exist_ok=True)
+    doc = _fitz.open(pdf_path)
+    total = len(doc)
+    for i, page in enumerate(doc, start=1):
+        mat = _fitz.Matrix(2.0, 2.0)  # 2x zoom = ~144 dpi
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        pix.save(_os.path.join(pages_dir, f"page_{i}.png"))
+    doc.close()
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -312,88 +336,105 @@ def register(mcp, record_call: Callable) -> None:
 
     @mcp.tool()
     def send_esign_request(
-        template: str,
-        signer_name: str,
-        signer_email: str,
-        fields: dict,
         namespace: str,
+        template: str = "",
+        signer_name: str = "",
+        signer_email: str = "",
+        fields: dict = None,
         reference_id: str = "",
         callback_url: str = "",
         send_email: bool = True,
         language: str = "fr",
+        file_url: str = "",
+        signers: str = "",
+        signature_fields: str = "",
+        expiration_days: int = 30,
+        reminder_frequency: str = "EVERY_THIRD_DAY",
     ) -> str:
         """
-        Send an electronic signature request for any document: enrollment contracts,
-        rental agreements, service agreements, NDAs, or custom documents. Generates a
-        PDF from template with pre-filled data, creates a mobile-friendly signing page,
-        and emails the signing link to the signer. After signing, the signed PDF is
-        automatically stored and a webhook callback updates the source system.
-        Input: template type, signer name, signer email, document fields, namespace.
-        Output: signing page URL, document ID, status.
-        Zero cost per signature -- no third-party e-signature service required.
-        Fully self-hosted. Compliant with eIDAS and ESIGN Act.
+        Send an electronic signature request. Supports two modes:
+        1. ClawShow native: generate PDF from template with pre-filled fields.
+        2. FocusingPro / external: pass a file_url (S3 PDF) + signers array.
+        After signing, the signed PDF is stored and webhook callback updates the source system.
+        AES-level (eIDAS Art.26): OTP email verification + SHA-256 digital signature.
 
         Args:
-            template:     Document template -- "enrollment_contract", "rental_agreement",
-                          "service_agreement", or "custom"
-            signer_name:  Full name of the person who will sign
-            signer_email: Email address of the signer (signing link sent here)
-            fields:       Template variables dict, e.g. {school_name: "ILCI", tuition: "8500"}
-            namespace:    Client namespace (e.g. "ilci", "florent")
-            reference_id: Optional external ID, e.g. FocusingPro inscription_id
-            callback_url: Optional webhook URL called when signing is complete
-            send_email:   Whether to email the signing link (default True)
-            language:     Signing page language -- "fr", "en", or "zh" (default "fr")
+            namespace:          Client namespace (e.g. "ilci", "florent")
+            template:           Document template -- "enrollment_contract", "rental_agreement",
+                                "service_agreement", or "custom". Required if no file_url.
+            signer_name:        Full name of the primary signer. Required if no signers array.
+            signer_email:       Email of the primary signer. Required if no signers array.
+            fields:             Template variables dict, e.g. {"school_name": "ILCI", "tuition": "8500"}.
+                                Use for native template mode.
+            reference_id:       Optional external ID, e.g. FocusingPro inscription_id.
+            callback_url:       Optional webhook URL called when signing is complete.
+            send_email:         Whether to email the signing link (default True).
+            language:           Signing page language -- "fr", "en", or "zh" (default "fr").
+            file_url:           URL of an existing PDF to sign (e.g. S3 pre-signed URL).
+                                When provided, template/fields are ignored.
+            signers:            JSON array string of signers for multi-party workflows.
+                                Each item: {"role":"student","name":"...","email":"...","order":1}.
+                                Order 1 signs first. If omitted, uses signer_name/signer_email.
+            signature_fields:   JSON object string defining custom signature positions per role.
+                                E.g. {"paraphe":{"x":390,"y":22,"w":160,"h":48}}.
+            expiration_days:    Days until signing link expires (default 30).
+            reminder_frequency: Reminder schedule -- "EVERY_THIRD_DAY", "WEEKLY", or "NONE".
 
         Returns:
-            JSON with signing_url, document_id, pdf_preview_url, status, signer_email, created_at.
+            JSON with signing_url, document_id, pdf_preview_url, signers list, status.
         """
-        record_call("send_esign_request", {"namespace": namespace, "template": template})
+        import json as _json
+        import requests as _req
 
-        doc_id = _next_doc_id(namespace)
-        signing_url = f"{BASE_URL}/esign/{doc_id}"
-        pdf_preview_url = f"{BASE_URL}/esign/{doc_id}/preview.pdf"
+        record_call("send_esign_request", {"namespace": namespace, "template": template or "external"})
+
+        payload = {
+            "namespace": namespace,
+            "reference_id": reference_id,
+            "callback_url": callback_url,
+            "language": language,
+            "send_email": send_email,
+            "expiration_days": expiration_days,
+            "reminder_frequency": reminder_frequency,
+        }
+
+        # File URL mode (FocusingPro / external PDF)
+        if file_url:
+            payload["file_url"] = file_url
+            # Parse signers JSON string if provided
+            if signers:
+                try:
+                    payload["signers"] = _json.loads(signers)
+                except Exception:
+                    return _json.dumps({"success": False, "error": "signers must be valid JSON array string"})
+            else:
+                if not signer_name or not signer_email:
+                    return _json.dumps({"success": False, "error": "signer_name and signer_email are required when signers array is not provided"})
+                payload["signers"] = [{"role": "student", "name": signer_name, "email": signer_email, "order": 1}]
+            if signature_fields:
+                try:
+                    payload["signature_fields"] = _json.loads(signature_fields)
+                except Exception:
+                    pass  # ignore malformed; server uses defaults
+        else:
+            # Native template mode
+            payload["template"] = template or "enrollment_contract"
+            payload["fields"] = fields or {}
+            if signers:
+                try:
+                    payload["signers"] = _json.loads(signers)
+                except Exception:
+                    return _json.dumps({"success": False, "error": "signers must be valid JSON array string"})
+            else:
+                payload["signer_name"] = signer_name
+                payload["signer_email"] = signer_email
 
         try:
-            html_path, pdf_path = _generate_pdf(doc_id, namespace, template, signer_name, fields)
-        except Exception as e:
-            return json.dumps({"success": False, "error": f"PDF generation failed: {e}"}, ensure_ascii=False)
-
-        db.create_esign_document(
-            doc_id=doc_id,
-            namespace=namespace,
-            template=template,
-            signer_name=signer_name,
-            signer_email=signer_email,
-            fields=fields,
-            signing_url=signing_url,
-            original_pdf_path=pdf_path,
-            rendered_html_path=html_path,
-            reference_id=reference_id,
-            callback_url=callback_url,
-            language=language,
-            send_email=send_email,
-        )
-
-        if send_email and signer_email:
-            threading.Thread(
-                target=_send_signing_email,
-                args=(signer_name, signer_email, signing_url, doc_id, language),
-                daemon=True,
-            ).start()
-
-        created_at = datetime.now(timezone.utc).isoformat()
-        return json.dumps({
-            "success": True,
-            "document_id": doc_id,
-            "signing_url": signing_url,
-            "pdf_preview_url": pdf_preview_url,
-            "status": "pending",
-            "signer_email": signer_email,
-            "created_at": created_at,
-            "email_sent": send_email and bool(signer_email),
-        }, ensure_ascii=False)
-
+            resp = _req.post(f"{BASE_URL}/esign/create", json=payload, timeout=120)
+            resp.raise_for_status()
+            return resp.text
+        except _req.exceptions.RequestException as exc:
+            return _json.dumps({"success": False, "error": str(exc)})
 
 # ---------------------------------------------------------------------------
 # V2: Multi-page overlay + school counter-sign

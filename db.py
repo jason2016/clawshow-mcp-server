@@ -514,7 +514,9 @@ def create_esign_document(doc_id: str, namespace: str, template: str, signer_nam
                            signer_email: str, fields: dict, signing_url: str,
                            original_pdf_path: str, rendered_html_path: str = "",
                            reference_id: str = "", callback_url: str = "",
-                           language: str = "fr", send_email: bool = True) -> dict:
+                           language: str = "fr", send_email: bool = True,
+                           total_pages: int = 1, signature_positions=None,
+                           initial_status: str = "pending") -> dict:
     ensure_namespace(namespace)
     with get_conn() as conn:
         conn.execute(
@@ -522,11 +524,20 @@ def create_esign_document(doc_id: str, namespace: str, template: str, signer_nam
                (id, namespace, template, reference_id, signer_name, signer_email,
                 fields, status, signing_url, original_pdf_path, rendered_html_path,
                 callback_url, language, send_email)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (doc_id, namespace, template, reference_id, signer_name, signer_email,
-             json.dumps(fields, ensure_ascii=False), signing_url, original_pdf_path,
+             json.dumps(fields, ensure_ascii=False), initial_status, signing_url, original_pdf_path,
              rendered_html_path, callback_url, language, int(send_email)),
         )
+        # Set total_pages and signature_positions via UPDATE (columns may be added by migration)
+        try:
+            sig_pos_json = json.dumps(signature_positions) if signature_positions else None
+            conn.execute(
+                "UPDATE esign_documents SET total_pages=?, signature_positions=? WHERE id=?",
+                (total_pages, sig_pos_json, doc_id),
+            )
+        except Exception:
+            pass  # columns may not exist on older schema
     return {"success": True, "document_id": doc_id}
 
 
