@@ -3,7 +3,7 @@
 > AI-callable MCP tools for small businesses. No signup, no dashboard, just results.
 
 **Endpoint:** `https://mcp.clawshow.ai/sse`  
-**Version:** 1.6.0  
+**Version:** 1.7.0  
 **Tools:** 11  
 **Transport:** SSE (Remote)
 
@@ -43,7 +43,7 @@ Settings → Integrations → Add URL: `https://mcp.clawshow.ai/sse`
 
 ### Electronic Signature
 
-**`send_esign_request`** — Send e-signature requests for contracts and agreements. Generates PDF from template, mobile-friendly signing page, auto-stores signed documents. Zero cost per signature. Fully self-hosted. eIDAS compliant.
+**`send_esign_request`** — Full electronic signature platform (V2). Multi-page document signing with per-page paraphes + final signature block. Dual-party flow: student signs first, school counter-signs automatically notified by email. Three input modes: Draw (Bézier pen), Type (styled font), Upload image. Real-time progress bar, mobile-friendly. Webhook callbacks on `signer.signed`, `document.completed`, `document.expired`. Full audit trail with IP, timestamp, city. FocusingPro compatible (`send_foxit_esign` drop-in). Zero cost per signature. Fully self-hosted. eIDAS compliant.
 
 ### Business Management
 
