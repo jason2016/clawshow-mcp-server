@@ -2077,16 +2077,16 @@ async def de_payment_create(request: Request) -> JSONResponse:
         )
         result = resp.json()
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
+        return JSONResponse({"error": "payment_unavailable", "fallback": True, "detail": str(e)}, status_code=502)
     if resp.status_code not in (200, 201):
         return JSONResponse(
-            {"error": result.get("error", f"Stancer error {resp.status_code}")},
+            {"error": "payment_unavailable", "fallback": True, "detail": result.get("error", f"Stancer {resp.status_code}")},
             status_code=502,
         )
     payment_id = result.get("id", "")
     payment_url = result.get("url", "")
     if not payment_url:
-        return JSONResponse({"error": "No payment URL from Stancer"}, status_code=502)
+        return JSONResponse({"error": "payment_unavailable", "fallback": True, "detail": "No payment URL from Stancer"}, status_code=502)
     _de_db.update_order_payment(int(order_id), payment_id, "stancer")
     return JSONResponse({"payment_url": payment_url, "payment_id": payment_id})
 
@@ -2099,7 +2099,7 @@ async def de_payment_webhook(request: Request) -> JSONResponse:
         data = await request.json()
     except Exception:
         return JSONResponse({"received": True})
-    payment_id = data.get("payment_id", "")
+    payment_id = data.get("id") or data.get("payment_id", "")  # Stancer sends "id"
     status = data.get("status", "")
     if not payment_id:
         return JSONResponse({"received": True})

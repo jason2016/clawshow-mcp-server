@@ -248,9 +248,21 @@ def create_order(data: dict) -> dict | None:
     cashback_used = 0.0
     if customer_id and cashback_use > 0:
         bal = get_balance(int(customer_id))
-        cashback_used = round(min(cashback_use, bal["balance"]), 2)
+        cashback_used = round(min(cashback_use, bal["balance"], subtotal), 2)
 
     total_paid = round(subtotal - cashback_used, 2)
+
+    # Determine effective payment method and initial status
+    if total_paid == 0:
+        effective_payment_method = "balance"
+        initial_status = "paid"
+    elif cashback_used > 0:
+        effective_payment_method = "mixed"
+        initial_status = "pending"
+    else:
+        effective_payment_method = payment_method
+        initial_status = "pending"
+
     order_number = _next_order_number()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -260,7 +272,7 @@ def create_order(data: dict) -> dict | None:
                (order_number, customer_id, items, subtotal, cashback_used,
                 total_paid, payment_method, status, table_number, note,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 order_number,
                 customer_id,
@@ -268,7 +280,8 @@ def create_order(data: dict) -> dict | None:
                 subtotal,
                 cashback_used,
                 total_paid,
-                payment_method,
+                effective_payment_method,
+                initial_status,
                 table_number,
                 note,
                 now,
