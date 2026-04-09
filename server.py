@@ -677,6 +677,9 @@ button{cursor:pointer}
 .btn-danger{padding:8px 16px;background:#c62828;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600}
 /* RESULT */
 #resultArea{padding:60px 16px;text-align:center;max-width:500px;margin:0 auto}
+.aes-badge-hdr{display:inline-block;background:linear-gradient(135deg,#1a5276,#2980b9);color:white;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;margin-left:8px;letter-spacing:.5px;vertical-align:middle}
+.aes-compliance-footer{font-size:11px;color:#888;text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #e0e0e0}
+.aes-details-box{background:#f0f7ff;padding:12px 16px;border-radius:8px;margin:16px 0;font-size:13px;text-align:left;border:1px solid #cce0ff}
 .res-ok{background:#fff;border:1px solid #ddd;border-radius:12px;padding:36px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
 .res-ok h2{color:#28a745;font-size:22px;margin-bottom:12px}
 .res-ok p{color:#555;line-height:1.65;margin-bottom:6px}
@@ -689,7 +692,7 @@ button{cursor:pointer}
 
 <!-- TOP BAR -->
 <div id="topBar">
-  <div id="docBrand">ClawShow eSign</div>
+  <div id="docBrand">ClawShow eSign <span class="aes-badge-hdr">&#x1F512; AES</span></div>
   <div id="progWrap">
     <div id="progBar"><div id="progFill"></div></div>
     <span id="reqLeftLabel"></span>
@@ -1114,7 +1117,7 @@ function doFinish(){
     document.getElementById('topBar').style.display='none';
     document.getElementById('resultArea').style.display='block';
     if(d.success){
-      document.getElementById('resultArea').innerHTML='<div class="res-ok"><h2>'+(L.success_title||'\\u2705 Signature enregistr\\u00e9e')+'</h2><p>'+(L.success_msg||'Votre signature a \\u00e9t\\u00e9 enregistr\\u00e9e avec succ\\u00e8s.')+'</p><p style="margin-top:8px">'+(L.success_pending_school||'Le document est en attente de la signature de l\\u0027administration scolaire.')+'</p><p style="margin-top:8px">'+(L.success_email_note||'Vous recevrez un email de confirmation une fois le document finalis\\u00e9.')+'</p></div>';
+      document.getElementById('resultArea').innerHTML='<div class="res-ok"><h2>'+(L.success_title||'\\u2705 Signature enregistr\\u00e9e')+'</h2><p>'+(L.success_msg||'Votre signature a \\u00e9t\\u00e9 enregistr\\u00e9e avec succ\\u00e8s.')+'<div class=\"aes-details-box\"><p>&#x1F512; Identit&#xE9; v&#xE9;rifi&#xE9;e par code OTP</p><p>&#x1F4C4; Document sign&#xE9; num&#xE9;riquement (SHA-256)</p><p>&#x23F1;&#xFE0F; Horodatage\u00a0: '+new Date().toLocaleString('fr-FR')+'</p></div>')+'</p><p style="margin-top:8px">'+(L.success_pending_school||'Le document est en attente de la signature de l\\u0027administration scolaire.')+'</p><p style="margin-top:8px">'+(L.success_email_note||'Vous recevrez un email de confirmation une fois le document finalis\\u00e9.')+'</p></div>';
     } else {
       document.getElementById('resultArea').innerHTML='<div class="res-dec"><p>Error: '+(d.error||'Unknown')+'</p></div>';
     }
@@ -1187,6 +1190,11 @@ window.addEventListener('resize',()=>{
   if(S.cur===S.total){szCv(document.getElementById('luCv'));szCv(document.getElementById('fsCv'));}
 });
 </script>
+<div class="aes-compliance-footer">
+  <p>&#x1F512; Signature &#xC9;lectronique Avanc&#xE9;e (AES) conforme au R&#xE8;glement eIDAS (UE) n&#xB0;910/2014, Art.&#xA0;26<br>
+  Identit&#xE9; v&#xE9;rifi&#xE9;e par code OTP &#xB7; Int&#xE9;grit&#xE9; garantie par signature num&#xE9;rique SHA-256</p>
+  <p style="font-size:10px;color:#aaa;margin-top:4px;">Document ID: __ESIGN_DOC_ID__ &#xB7; Powered by ClawShow eSign &mdash; <a href="https://clawshow.ai/esign" style="color:#2980b9;text-decoration:none;">AES compliance info</a></p>
+</div>
 </body>
 </html>"""
 
@@ -1410,7 +1418,7 @@ _LABELS = {
         "submitting": "Envoi en cours...",
         "prev": "Pr\u00e9c\u00e9dent",
         "next": "Suivant",
-        "success_msg": "Votre signature a \u00e9t\u00e9 enregistr\u00e9e avec succ\u00e8s.",
+        "success_msg": "Votre <strong>Signature \u00c9lectronique Avanc\u00e9e (AES)</strong> a \u00e9t\u00e9 enregistr\u00e9e avec succ\u00e8s.",
         "download": "T\u00e9l\u00e9charger le document sign\u00e9",
         "declined_msg": "Vous avez refus\u00e9 de signer ce document.",
         "req_left": "Champs restants",
@@ -1523,6 +1531,7 @@ def _render_signing_page(doc: dict, token: str = "") -> str:
     page = _SIGNING_PAGE_TEMPLATE
     page = page.replace("__CONFIG_JSON__", config)
     page = page.replace("__LANG__", lang)
+    page = page.replace("__ESIGN_DOC_ID__", doc.get("id",""))
     return page
 
 

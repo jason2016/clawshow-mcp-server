@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.8.0] — 2026-04-09
+
+### Added — eSign AES (Advanced Electronic Signature) Compliance
+
+- **OTP email verification gate** before signing page: 6-digit code, 10-min expiry, 5-attempt lockout (30 min)
+- **PDF digital signature** (pyHanko + SHA-256 + X.509 self-signed cert): tamper-detectable post-signing
+- `esign_otp` table for OTP management (code, expiry, attempts, lock)
+- `otp_verified_at` column on `esign_signers` for session persistence
+- `/otp/send` and `/otp/verify` REST endpoints
+- `/verify` endpoint: document integrity check (cert info + all signers + otp_verified flag)
+- `/audit` endpoint: full audit log per document
+- AES badge (`🔒 AES`) in signing page header
+- AES compliance footer in signing page (eIDAS Art. 26 + SHA-256 notice + link to clawshow.ai/esign)
+- AES details box in signature confirmation page (OTP ✓, SHA-256 ✓, timestamp)
+- OTP page AES explanation text
+- eSign AES compliance page at [clawshow.ai/esign](https://clawshow.ai/esign)
+
+### Fixed
+
+- Document ID UNIQUE constraint collision: replaced `COUNT(*)+1` with `max(existing_nums)+1`
+- Tokenless signing URLs now 302-redirect to token-bearing URL (OTP gate was bypassable)
+- `digitally_sign_pdf` 0-byte output bug: `ds_pdf` path used wrong `.replace()` anchor causing input=output file truncation
+
+---
+
 ## [1.7.0] — 2026-04-09
 
 ### Added — eSign V2: Complete Electronic Signature Platform
