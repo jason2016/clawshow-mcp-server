@@ -89,10 +89,20 @@ def init_tables() -> None:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_orders_status   ON orders(status);
-            CREATE INDEX IF NOT EXISTS idx_orders_date     ON orders(created_at);
+            CREATE TABLE IF NOT EXISTS order_status_history (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id   INTEGER NOT NULL,
+                status     TEXT NOT NULL,
+                changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                changed_by TEXT,
+                FOREIGN KEY (order_id) REFERENCES orders(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_orders_status    ON orders(status);
+            CREATE INDEX IF NOT EXISTS idx_orders_date      ON orders(created_at);
             CREATE INDEX IF NOT EXISTS idx_balance_customer ON balance_transactions(customer_id);
-            CREATE INDEX IF NOT EXISTS idx_otp_email       ON otp_codes(email, used);
+            CREATE INDEX IF NOT EXISTS idx_otp_email        ON otp_codes(email, used);
+            CREATE INDEX IF NOT EXISTS idx_history_order    ON order_status_history(order_id);
         """)
 
 
@@ -245,12 +255,23 @@ def create_order(data: dict) -> dict | None:
     table_number = str(data.get("table_number", "") or "")
     note = str(data.get("note", "") or "")
 
+    # Delivery fields
+    order_type = data.get("order_type", "dine_in") or "dine_in"
+    delivery_address = str(data.get("delivery_address", "") or "")
+    delivery_phone = str(data.get("delivery_phone", "") or "")
+    delivery_instructions = str(data.get("delivery_instructions", "") or "")
+    delivery_fee = round(float(data.get("delivery_fee", 0) or 0), 2)
+
+    # Guest fields (non-registered users)
+    guest_name = str(data.get("guest_name", "") or "")
+    guest_phone = str(data.get("guest_phone", "") or "")
+
     cashback_used = 0.0
     if customer_id and cashback_use > 0:
         bal = get_balance(int(customer_id))
-        cashback_used = round(min(cashback_use, bal["balance"], subtotal), 2)
+        cashback_used = round(min(cashback_use, bal["balance"], subtotal + delivery_fee), 2)
 
-    total_paid = round(subtotal - cashback_used, 2)
+    total_paid = round(subtotal + delivery_fee - cashback_used, 2)
 
     # Determine effective payment method and initial status
     if total_paid == 0:
@@ -271,8 +292,11 @@ def create_order(data: dict) -> dict | None:
             """INSERT INTO orders
                (order_number, customer_id, items, subtotal, cashback_used,
                 total_paid, payment_method, status, table_number, note,
+                order_type, delivery_address, delivery_phone,
+                delivery_instructions, delivery_fee,
+                guest_name, guest_phone,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 order_number,
                 customer_id,
@@ -284,6 +308,13 @@ def create_order(data: dict) -> dict | None:
                 initial_status,
                 table_number,
                 note,
+                order_type,
+                delivery_address,
+                delivery_phone,
+                delivery_instructions,
+                delivery_fee,
+                guest_name,
+                guest_phone,
                 now,
                 now,
             ),
@@ -329,6 +360,7 @@ def query_orders(
     date: str = "",
     customer_id: int | None = None,
     order_number: str = "",
+    order_type: str = "",
 ) -> list[dict]:
     sql = "SELECT * FROM orders WHERE 1=1"
     params: list = []
@@ -344,20 +376,65 @@ def query_orders(
     if order_number:
         sql += " AND order_number = ?"
         params.append(order_number)
+    if order_type:
+        sql += " AND order_type = ?"
+        params.append(order_type)
     sql += " ORDER BY id DESC"
     with get_conn() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_order(r) for r in rows]
 
 
-def update_order_status(order_id: int, new_status: str) -> dict | None:
+def get_stats(date: str) -> dict:
+    """Return daily stats for admin panel."""
+    orders = query_orders(date=date)
+    active = [o for o in orders if o.get("status") != "cancelled"]
+    revenue = round(sum(float(o.get("total_paid", 0)) for o in active), 2)
+    cashback_issued = round(sum(float(o.get("cashback_earned", 0)) for o in orders), 2)
+    by_type = {
+        "dine_in": sum(1 for o in active if o.get("order_type", "dine_in") == "dine_in"),
+        "delivery": sum(1 for o in active if o.get("order_type") == "delivery"),
+        "balance_only": sum(1 for o in active if o.get("payment_method") == "balance"),
+    }
+    status_counts: dict = {}
+    for o in orders:
+        s = o.get("status", "unknown")
+        status_counts[s] = status_counts.get(s, 0) + 1
+    return {
+        "total_orders": len(orders),
+        "revenue": revenue,
+        "cashback_issued": cashback_issued,
+        "by_type": by_type,
+        "by_status": status_counts,
+    }
+
+
+def update_order_status(order_id: int, new_status: str, changed_by: str = "system") -> dict | None:
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
         conn.execute(
             "UPDATE orders SET status = ?, updated_at = ? WHERE id = ?",
             (new_status, now, order_id),
         )
+        conn.execute(
+            "INSERT INTO order_status_history (order_id, status, changed_at, changed_by) VALUES (?, ?, ?, ?)",
+            (order_id, new_status, now, changed_by),
+        )
     return get_order_by_id(order_id)
+
+
+def get_order_tracking(order_number: str) -> dict | None:
+    """Return order dict with status_history list for public tracking."""
+    order = get_order_by_number(order_number)
+    if not order:
+        return None
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT status, changed_at, changed_by FROM order_status_history WHERE order_id = ? ORDER BY id ASC",
+            (order["id"],),
+        ).fetchall()
+    order["status_history"] = [dict(r) for r in rows]
+    return order
 
 
 def update_order_payment(order_id: int, payment_id: str, payment_method: str) -> None:

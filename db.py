@@ -436,8 +436,8 @@ def cancel_booking(namespace: str, booking_id: int) -> dict:
 
 
 def arrive_booking(namespace: str, booking_id: int) -> dict:
-    """Mark booking as 'arrived' and create a dine_order linked to it.
-    If deposit was paid, record deposit_applied on the order.
+    """Mark booking as 'arrived' and create a kitchen dispatch dine_order.
+    v2.4.0: full-payment bookings — dine_order is pre-paid, no checkout needed.
     """
     booking = get_booking_by_id(namespace, booking_id)
     if not booking:
@@ -447,7 +447,6 @@ def arrive_booking(namespace: str, booking_id: int) -> dict:
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Parse items
     items = booking.get("items") or []
     if isinstance(items, str):
         try:
@@ -456,18 +455,11 @@ def arrive_booking(namespace: str, booking_id: int) -> dict:
             items = []
     items_json = json.dumps(items, ensure_ascii=False)
 
-    # Deposit applied if deposit was paid
-    deposit_applied = 0.0
-    if booking.get("deposit_payment_status") == "paid":
-        deposit_applied = float(booking.get("deposit_amount") or 0)
-
     with get_conn() as conn:
-        # Mark booking as arrived
         conn.execute(
             "UPDATE bookings SET status = 'arrived' WHERE id = ? AND namespace = ?",
             (booking_id, namespace),
         )
-        # Create linked dine_order
         order_number = _next_dine_order_number(conn, namespace)
         cur = conn.execute(
             """INSERT INTO dine_orders
@@ -476,32 +468,23 @@ def arrive_booking(namespace: str, booking_id: int) -> dict:
                 booking_id, deposit_applied, order_source,
                 booking_code, booking_guests, booking_time,
                 created_at, updated_at)
-               VALUES (?, ?, 'dine_in', ?, ?, 'pending', 'unpaid', 'online',
-               ?, ?, 'reservation', ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, 'dine_in', ?, ?, 'pending', 'paid', 'online',
+               ?, 0, 'reservation', ?, ?, ?, ?, ?)""",
             (namespace, order_number, items_json,
              float(booking.get("total") or 0),
-             booking_id, deposit_applied,
+             booking_id,
              booking.get("booking_code", ""),
              int(booking.get("guests") or 0),
              booking.get("booking_time", ""),
              now, now),
         )
         order_id = cur.lastrowid
-        # Mark deposit as used on the booking
-        if deposit_applied > 0:
-            conn.execute(
-                "UPDATE bookings SET deposit_payment_status='used', deposit_used_at=?, deposit_used_in_order_id=?"
-                " WHERE id=? AND namespace=?",
-                (now, order_id, booking_id, namespace),
-            )
 
     return {
         "success": True,
         "booking_id": booking_id,
         "order_id": order_id,
         "order_number": order_number,
-        "pickup_number": order_number,
-        "deposit_applied": deposit_applied,
         "items": items,
     }
 

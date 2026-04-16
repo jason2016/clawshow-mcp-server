@@ -689,6 +689,40 @@ from tools.neige_rouge_receipt import generate_invoice as _nr_generate_invoice
 from starlette.responses import Response as StarletteResponse
 
 
+async def api_nr_booking_receipt(request: Request) -> StarletteResponse:
+    """GET /api/neige-rouge/bookings/{id}/receipt — receipt PDF directly from booking (pre-arrival)."""
+    booking_id = int(request.path_params["id"])
+    namespace = request.query_params.get("namespace", "neige-rouge")
+    try:
+        booking = db.get_booking_by_id(namespace, booking_id)
+        if not booking:
+            return JSONResponse({"error": "Booking not found"}, status_code=404)
+        # Build an order-like dict for the receipt generator
+        items = booking.get("items") or []
+        if isinstance(items, str):
+            import json as _json
+            items = _json.loads(items)
+        order_dict = {
+            "items": items,
+            "total_amount": float(booking.get("total") or 0),
+            "order_number": f"R-{booking.get('booking_code', '???')}",
+            "receipt_number": f"R-{booking.get('booking_code', '???')}",
+            "order_type": "dine_in",
+            "payment_method": "stancer",
+            "payment_id": booking.get("deposit_payment_id", ""),
+            "created_at": booking.get("created_at", ""),
+        }
+        pdf_bytes = _nr_generate_receipt(order_dict)
+        filename = f"recu-R-{booking.get('booking_code', booking_id)}.pdf"
+        return StarletteResponse(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 async def api_nr_receipt(request: Request) -> StarletteResponse:
     """GET /api/neige-rouge/orders/{id}/receipt — generate receipt PDF (idempotent)."""
     order_id = int(request.path_params["id"])
@@ -2521,6 +2555,7 @@ def _build_app() -> Starlette:
             # Neige Rouge 红雪餐厅 — booking deposit & arrive
             Route("/api/neige-rouge/bookings/verify", api_nr_booking_verify, methods=["GET"]),
             Route("/api/neige-rouge/bookings/{id:int}/arrive", api_nr_booking_arrive, methods=["POST"]),
+            Route("/api/neige-rouge/bookings/{id:int}/receipt", api_nr_booking_receipt, methods=["GET"]),
             Route("/api/neige-rouge/bookings/{id:int}/use-deposit", api_nr_booking_use_deposit, methods=["POST"]),
             Route("/api/neige-rouge/bookings/{id:int}/refund", api_nr_booking_refund, methods=["POST"]),
             Route("/api/neige-rouge/orders/{id:int}/checkout", api_nr_checkout, methods=["POST"]),
