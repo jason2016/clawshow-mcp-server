@@ -333,17 +333,21 @@ async def api_create_booking(request: Request) -> JSONResponse:
 
     booking_id = result["booking_id"]
     booking_code = result["booking_code"]
-    payment_required = result.get("payment_required", False)
+    payment_type = result.get("payment_type", "deposit")  # 'full' | 'deposit'
     deposit_amount = result.get("deposit_amount", 0)
 
-    # If deposit requested, create Stancer payment intent (mandatory — error if fails)
+    # Both payment types always require Stancer payment — mandatory, hard-fail if unavailable
     payment_url = None
-    if payment_required and deposit_amount > 0:
+    if deposit_amount > 0:
         stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
         if not stancer_key or stancer_key.startswith("stest_your"):
             return JSONResponse({"error": "payment_unavailable", "detail": "Stancer not configured"}, status_code=503)
         auth = base64.b64encode(f"{stancer_key}:".encode()).decode()
         return_url = f"https://jason2016.github.io/neige-rouge/#booking-success?booking_id={booking_id}&booking_code={booking_code}"
+        if payment_type == "full":
+            description = f"Commande complète reservation #{booking_code} - Neige Rouge"
+        else:
+            description = f"Acompte reservation #{booking_code} - Neige Rouge"
         try:
             resp = _req_lib.post(
                 "https://api.stancer.com/v2/payment_intents/",
@@ -351,7 +355,7 @@ async def api_create_booking(request: Request) -> JSONResponse:
                 json={
                     "amount": int(round(deposit_amount * 100)),
                     "currency": "eur",
-                    "description": f"Acompte reservation #{booking_code} - Neige Rouge",
+                    "description": description,
                     "return_url": return_url,
                 },
                 timeout=15,

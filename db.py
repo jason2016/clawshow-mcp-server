@@ -173,6 +173,7 @@ def init_tables():
         for _col, _def in [
             ("guests", "INTEGER DEFAULT 1"),
             ("payment_required", "INTEGER DEFAULT 0"),
+            ("payment_type", "TEXT DEFAULT 'deposit'"),
             ("deposit_amount", "REAL DEFAULT 0"),
             ("deposit_per_person", "REAL DEFAULT 10"),
             ("deposit_payment_id", "TEXT DEFAULT ''"),
@@ -269,30 +270,35 @@ def create_booking(namespace: str, data: dict) -> dict:
     items_json = json.dumps(data.get("items", []), ensure_ascii=False)
     booking_date = data.get("booking_date", "")
     guests = int(data.get("guests", 1) or 1)
-    payment_required = 1 if data.get("payment_required") else 0
+    # Both payment types are always required; payment_type: 'full' | 'deposit'
+    payment_type = data.get("payment_type", "deposit")  # 'full' pays cart total, 'deposit' pays 10€/person
+    payment_required = 1
     deposit_per_person = float(data.get("deposit_per_person", 10) or 10)
-    deposit_amount = round(guests * deposit_per_person, 2) if payment_required else 0.0
+    if payment_type == "full":
+        deposit_amount = round(float(data.get("total", 0) or 0), 2)
+    else:
+        deposit_amount = round(guests * deposit_per_person, 2)
 
     with get_conn() as conn:
         code = _next_booking_code(conn, namespace, booking_date)
         cur = conn.execute(
             """INSERT INTO bookings (namespace, customer_name, customer_phone, customer_email,
                booking_date, booking_time, booking_code, type, items, total, notes, status,
-               guests, payment_required, deposit_amount, deposit_per_person,
+               guests, payment_required, payment_type, deposit_amount, deposit_per_person,
                deposit_payment_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?)""",
             (namespace, data.get("customer_name", ""), data.get("customer_phone", ""),
              data.get("customer_email", ""), booking_date,
              data.get("booking_time", ""), code, data.get("type", "emporter"),
              items_json, data.get("total", 0), data.get("notes", ""),
-             guests, payment_required, deposit_amount, deposit_per_person,
-             "unpaid" if payment_required else "", now),
+             guests, payment_required, payment_type, deposit_amount, deposit_per_person,
+             "unpaid", now),
         )
         booking_id = cur.lastrowid
 
     return {
         "success": True, "booking_id": booking_id, "booking_code": code, "namespace": namespace,
-        "payment_required": bool(payment_required), "deposit_amount": deposit_amount,
+        "payment_required": True, "payment_type": payment_type, "deposit_amount": deposit_amount,
     }
 
 
