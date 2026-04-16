@@ -374,7 +374,7 @@ async def api_create_booking(request: Request) -> JSONResponse:
     # Send confirmation email (always, even if payment pending)
     threading.Thread(
         target=_send_booking_email,
-        args=(data, booking_code, deposit_amount if payment_required else 0),
+        args=(data, booking_code, deposit_amount),
         daemon=True,
     ).start()
 
