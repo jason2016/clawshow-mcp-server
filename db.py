@@ -101,10 +101,32 @@ def init_tables():
                 FOREIGN KEY (namespace) REFERENCES namespaces(namespace)
             );
 
+            CREATE TABLE IF NOT EXISTS nr_receipt_counter (
+                year        INTEGER PRIMARY KEY,
+                last_number INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS nr_invoice_counter (
+                year        INTEGER PRIMARY KEY,
+                last_number INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS nr_invoices (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace         TEXT NOT NULL,
+                order_id          INTEGER NOT NULL,
+                invoice_number    TEXT NOT NULL,
+                client_company    TEXT NOT NULL,
+                client_address    TEXT NOT NULL,
+                client_vat_number TEXT DEFAULT '',
+                created_at        TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_bookings_ns_date ON bookings(namespace, booking_date);
             CREATE INDEX IF NOT EXISTS idx_orders_ns_status ON orders(namespace, status);
             CREATE INDEX IF NOT EXISTS idx_dine_orders_ns_status ON dine_orders(namespace, status);
             CREATE INDEX IF NOT EXISTS idx_dine_orders_ns_date ON dine_orders(namespace, created_at);
+            CREATE INDEX IF NOT EXISTS idx_nr_invoices_order ON nr_invoices(order_id);
 
             CREATE TABLE IF NOT EXISTS esign_documents (
                 id               TEXT PRIMARY KEY,
@@ -147,6 +169,38 @@ def init_tables():
             conn.execute("SELECT booking_code FROM bookings LIMIT 1")
         except Exception:
             conn.execute("ALTER TABLE bookings ADD COLUMN booking_code TEXT DEFAULT ''")
+        # Migration: add deposit columns if missing
+        for _col, _def in [
+            ("guests", "INTEGER DEFAULT 1"),
+            ("payment_required", "INTEGER DEFAULT 0"),
+            ("deposit_amount", "REAL DEFAULT 0"),
+            ("deposit_per_person", "REAL DEFAULT 10"),
+            ("deposit_payment_id", "TEXT DEFAULT ''"),
+            ("deposit_payment_status", "TEXT DEFAULT ''"),
+            ("deposit_paid_at", "TEXT DEFAULT ''"),
+            ("deposit_refunded_at", "TEXT DEFAULT ''"),
+            ("deposit_used_at", "TEXT DEFAULT ''"),
+            ("deposit_used_in_order_id", "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"SELECT {_col} FROM bookings LIMIT 1")
+            except Exception:
+                conn.execute(f"ALTER TABLE bookings ADD COLUMN {_col} {_def}")
+        # Migration: add reservation columns to dine_orders if missing
+        for _col, _def in [
+            ("booking_id",     "INTEGER DEFAULT 0"),
+            ("deposit_applied","REAL DEFAULT 0"),
+            ("order_source",   "TEXT DEFAULT 'dine_in'"),
+            ("booking_code",   "TEXT DEFAULT ''"),
+            ("booking_guests", "INTEGER DEFAULT 0"),
+            ("booking_time",   "TEXT DEFAULT ''"),
+            ("payment_id",     "TEXT DEFAULT ''"),
+            ("receipt_number", "TEXT DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"SELECT {_col} FROM dine_orders LIMIT 1")
+            except Exception:
+                conn.execute(f"ALTER TABLE dine_orders ADD COLUMN {_col} {_def}")
         # Backfill empty booking_codes (ordered by created_at within each week)
         empty = conn.execute(
             "SELECT id, namespace, booking_date FROM bookings WHERE booking_code = '' OR booking_code IS NULL ORDER BY created_at"
@@ -214,21 +268,101 @@ def create_booking(namespace: str, data: dict) -> dict:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     items_json = json.dumps(data.get("items", []), ensure_ascii=False)
     booking_date = data.get("booking_date", "")
+    guests = int(data.get("guests", 1) or 1)
+    payment_required = 1 if data.get("payment_required") else 0
+    deposit_per_person = float(data.get("deposit_per_person", 10) or 10)
+    deposit_amount = round(guests * deposit_per_person, 2) if payment_required else 0.0
 
     with get_conn() as conn:
         code = _next_booking_code(conn, namespace, booking_date)
         cur = conn.execute(
             """INSERT INTO bookings (namespace, customer_name, customer_phone, customer_email,
-               booking_date, booking_time, booking_code, type, items, total, notes, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)""",
+               booking_date, booking_time, booking_code, type, items, total, notes, status,
+               guests, payment_required, deposit_amount, deposit_per_person,
+               deposit_payment_status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?)""",
             (namespace, data.get("customer_name", ""), data.get("customer_phone", ""),
              data.get("customer_email", ""), booking_date,
              data.get("booking_time", ""), code, data.get("type", "emporter"),
-             items_json, data.get("total", 0), data.get("notes", ""), now),
+             items_json, data.get("total", 0), data.get("notes", ""),
+             guests, payment_required, deposit_amount, deposit_per_person,
+             "unpaid" if payment_required else "", now),
         )
         booking_id = cur.lastrowid
 
-    return {"success": True, "booking_id": booking_id, "booking_code": code, "namespace": namespace}
+    return {
+        "success": True, "booking_id": booking_id, "booking_code": code, "namespace": namespace,
+        "payment_required": bool(payment_required), "deposit_amount": deposit_amount,
+    }
+
+
+def get_booking_by_id(namespace: str, booking_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM bookings WHERE id = ? AND namespace = ?", (booking_id, namespace)
+        ).fetchone()
+    if not row:
+        return None
+    d = _row_to_dict(row)
+    return d
+
+
+def update_booking_deposit_payment(namespace: str, booking_id: int,
+                                    payment_id: str, status: str) -> dict:
+    """Record deposit payment_id and status (unpaid/paid/refunded)."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        if status == "paid":
+            cur = conn.execute(
+                "UPDATE bookings SET deposit_payment_id=?, deposit_payment_status=?, deposit_paid_at=? WHERE id=? AND namespace=?",
+                (payment_id, status, now, booking_id, namespace),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE bookings SET deposit_payment_id=?, deposit_payment_status=? WHERE id=? AND namespace=?",
+                (payment_id, status, booking_id, namespace),
+            )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Booking {booking_id} not found"}
+    return {"success": True, "booking_id": booking_id, "deposit_payment_status": status}
+
+
+def use_booking_deposit(namespace: str, booking_id: int, order_id: int) -> dict:
+    """Mark deposit as used for a dine order. Returns deposit_amount."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT deposit_amount, deposit_payment_status FROM bookings WHERE id = ? AND namespace = ?",
+            (booking_id, namespace),
+        ).fetchone()
+        if not row:
+            return {"success": False, "error": "Booking not found"}
+        if row["deposit_payment_status"] != "paid":
+            return {"success": False, "error": "Deposit not paid"}
+        deposit = float(row["deposit_amount"] or 0)
+        conn.execute(
+            "UPDATE bookings SET deposit_payment_status='used', deposit_used_at=?, deposit_used_in_order_id=? WHERE id=? AND namespace=?",
+            (now, order_id, booking_id, namespace),
+        )
+        # Subtract deposit from dine order total_amount
+        conn.execute(
+            "UPDATE dine_orders SET total_amount = MAX(0, total_amount - ?), updated_at = ? WHERE id = ? AND namespace = ?",
+            (deposit, now, order_id, namespace),
+        )
+    return {"success": True, "booking_id": booking_id, "order_id": order_id, "deposit_used": deposit}
+
+
+def mark_booking_deposit_refunded(namespace: str, booking_id: int) -> dict:
+    """Mark deposit as refunded (Stancer refund already done by caller)."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE bookings SET deposit_payment_status='refunded', deposit_refunded_at=? WHERE id=? AND namespace=?",
+            (now, booking_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": "Booking not found"}
+    return {"success": True, "booking_id": booking_id, "deposit_payment_status": "refunded"}
 
 
 def query_bookings(namespace: str, date: str = "", status: str = "", limit: int = 50) -> list[dict]:
@@ -271,7 +405,7 @@ def booking_summary(namespace: str, date: str) -> dict:
 
 
 def update_booking_status(namespace: str, booking_id: int, status: str) -> dict:
-    valid = ("confirmed", "completed", "cancelled", "no_show")
+    valid = ("confirmed", "arrived", "completed", "cancelled", "no_show")
     if status not in valid:
         return {"success": False, "error": f"Invalid status. Must be one of: {', '.join(valid)}"}
     with get_conn() as conn:
@@ -293,6 +427,77 @@ def cancel_booking(namespace: str, booking_id: int) -> dict:
         if cur.rowcount == 0:
             return {"success": False, "error": f"Booking {booking_id} not found or already cancelled"}
     return {"success": True, "booking_id": booking_id, "status": "cancelled"}
+
+
+def arrive_booking(namespace: str, booking_id: int) -> dict:
+    """Mark booking as 'arrived' and create a dine_order linked to it.
+    If deposit was paid, record deposit_applied on the order.
+    """
+    booking = get_booking_by_id(namespace, booking_id)
+    if not booking:
+        return {"success": False, "error": "Booking not found"}
+    if booking.get("status") not in ("confirmed",):
+        return {"success": False, "error": f"Booking status is '{booking.get('status')}', cannot mark as arrived"}
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Parse items
+    items = booking.get("items") or []
+    if isinstance(items, str):
+        try:
+            items = json.loads(items)
+        except Exception:
+            items = []
+    items_json = json.dumps(items, ensure_ascii=False)
+
+    # Deposit applied if deposit was paid
+    deposit_applied = 0.0
+    if booking.get("deposit_payment_status") == "paid":
+        deposit_applied = float(booking.get("deposit_amount") or 0)
+
+    with get_conn() as conn:
+        # Mark booking as arrived
+        conn.execute(
+            "UPDATE bookings SET status = 'arrived' WHERE id = ? AND namespace = ?",
+            (booking_id, namespace),
+        )
+        # Create linked dine_order
+        order_number = _next_dine_order_number(conn, namespace)
+        cur = conn.execute(
+            """INSERT INTO dine_orders
+               (namespace, order_number, order_type, items, total_amount, status,
+                payment_status, payment_method,
+                booking_id, deposit_applied, order_source,
+                booking_code, booking_guests, booking_time,
+                created_at, updated_at)
+               VALUES (?, ?, 'dine_in', ?, ?, 'pending', 'unpaid', 'online',
+               ?, ?, 'reservation', ?, ?, ?, ?, ?)""",
+            (namespace, order_number, items_json,
+             float(booking.get("total") or 0),
+             booking_id, deposit_applied,
+             booking.get("booking_code", ""),
+             int(booking.get("guests") or 0),
+             booking.get("booking_time", ""),
+             now, now),
+        )
+        order_id = cur.lastrowid
+        # Mark deposit as used on the booking
+        if deposit_applied > 0:
+            conn.execute(
+                "UPDATE bookings SET deposit_payment_status='used', deposit_used_at=?, deposit_used_in_order_id=?"
+                " WHERE id=? AND namespace=?",
+                (now, order_id, booking_id, namespace),
+            )
+
+    return {
+        "success": True,
+        "booking_id": booking_id,
+        "order_id": order_id,
+        "order_number": order_number,
+        "pickup_number": order_number,
+        "deposit_applied": deposit_applied,
+        "items": items,
+    }
 
 
 def checkin_by_code(namespace: str, booking_code: str, booking_date: str = "") -> dict:
@@ -487,6 +692,25 @@ def update_dine_order_payment_status(namespace: str, order_id: int, payment_stat
             return {"success": False, "error": f"Order {order_id} not found"}
     return {"success": True, "order_id": order_id, "payment_status": payment_status}
 
+
+def mark_dine_order_printed(namespace: str, order_id: int) -> dict:
+    """Record that a kitchen ticket was printed for this order."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        # Migrate: add printed_at column if missing
+        try:
+            conn.execute("SELECT printed_at FROM dine_orders LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE dine_orders ADD COLUMN printed_at TEXT DEFAULT ''")
+        cur = conn.execute(
+            "UPDATE dine_orders SET printed_at = ?, updated_at = ? WHERE id = ? AND namespace = ?",
+            (now, now, order_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Order {order_id} not found"}
+    return {"success": True, "order_id": order_id, "printed_at": now}
+
+
 def query_dine_orders_history(namespace: str, date: str = "", status: str = "", limit: int = 200) -> list[dict]:
     """Return dine orders for a specific date (all statuses, including picked)."""
     if not date:
@@ -600,6 +824,117 @@ def confirm_dine_order_payment(namespace: str, order_id: int, payment_method: st
         if cur.rowcount == 0:
             return {"success": False, "error": f"Order {order_id} not found"}
     return {"success": True, "order_id": order_id, "payment_status": "paid", "amount_received": amount_received}
+
+
+# ---------------------------------------------------------------------------
+# Neige Rouge — Receipt & Invoice
+# ---------------------------------------------------------------------------
+
+def _get_dine_order(namespace: str, order_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM dine_orders WHERE id = ? AND namespace = ?", (order_id, namespace)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["items"] = json.loads(d["items"])
+    except Exception:
+        pass
+    return d
+
+
+def _next_nr_receipt_number(year: int) -> str:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO nr_receipt_counter (year, last_number) VALUES (?, 0) ON CONFLICT(year) DO NOTHING",
+            (year,),
+        )
+        conn.execute(
+            "UPDATE nr_receipt_counter SET last_number = last_number + 1 WHERE year = ?",
+            (year,),
+        )
+        row = conn.execute(
+            "SELECT last_number FROM nr_receipt_counter WHERE year = ?", (year,)
+        ).fetchone()
+    return f"NR-{year}-{row['last_number']:04d}"
+
+
+def _next_nr_invoice_number(year: int) -> str:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO nr_invoice_counter (year, last_number) VALUES (?, 0) ON CONFLICT(year) DO NOTHING",
+            (year,),
+        )
+        conn.execute(
+            "UPDATE nr_invoice_counter SET last_number = last_number + 1 WHERE year = ?",
+            (year,),
+        )
+        row = conn.execute(
+            "SELECT last_number FROM nr_invoice_counter WHERE year = ?", (year,)
+        ).fetchone()
+    return f"F-{year}-{row['last_number']:04d}"
+
+
+def get_or_assign_nr_receipt_number(namespace: str, order_id: int) -> str:
+    """Return existing receipt_number or assign a fresh NR-YYYY-NNNN."""
+    with get_conn() as conn:
+        # Migrate: add receipt_number if missing
+        try:
+            conn.execute("SELECT receipt_number FROM dine_orders LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE dine_orders ADD COLUMN receipt_number TEXT DEFAULT ''")
+        row = conn.execute(
+            "SELECT receipt_number FROM dine_orders WHERE id = ? AND namespace = ?",
+            (order_id, namespace),
+        ).fetchone()
+    if not row:
+        raise ValueError(f"Order {order_id} not found in namespace {namespace}")
+    if row["receipt_number"]:
+        return row["receipt_number"]
+    year = datetime.now(timezone.utc).year
+    receipt_number = _next_nr_receipt_number(year)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE dine_orders SET receipt_number = ?, updated_at = ? WHERE id = ? AND namespace = ?",
+            (receipt_number, now, order_id, namespace),
+        )
+    return receipt_number
+
+
+def create_nr_invoice_record(namespace: str, order_id: int, client_company: str,
+                              client_address: str, client_vat_number: str = "") -> dict:
+    """Create or return existing invoice record for a dine order."""
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT * FROM nr_invoices WHERE order_id = ? AND namespace = ?",
+            (order_id, namespace),
+        ).fetchone()
+        if existing:
+            return dict(existing)
+        year = datetime.now(timezone.utc).year
+        invoice_number = _next_nr_invoice_number(year)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        cur = conn.execute(
+            """INSERT INTO nr_invoices
+               (namespace, order_id, invoice_number, client_company, client_address, client_vat_number, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (namespace, order_id, invoice_number, client_company, client_address, client_vat_number, now),
+        )
+        inv_id = cur.lastrowid
+        row = conn.execute("SELECT * FROM nr_invoices WHERE id = ?", (inv_id,)).fetchone()
+    return dict(row)
+
+
+def get_nr_invoice_record(namespace: str, order_id: int) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM nr_invoices WHERE order_id = ? AND namespace = ?",
+            (order_id, namespace),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 # ---------------------------------------------------------------------------

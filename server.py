@@ -230,7 +230,7 @@ import db
 logger = logging.getLogger("clawshow")
 
 
-def _send_booking_email(data: dict, booking_code: str) -> None:
+def _send_booking_email(data: dict, booking_code: str, deposit_amount: float = 0) -> None:
     """Send booking confirmation email via SMTP (runs in background thread)."""
     try:
         email_to = data.get("customer_email", "")
@@ -287,10 +287,17 @@ def _send_booking_email(data: dict, booking_code: str) -> None:
               {items_html}
               <tr style="font-weight:700;font-size:16px"><td style="padding:12px 12px 6px" colspan="2">Total · 合计</td><td style="padding:12px 12px 6px;text-align:right;color:#8B0000">{total:.2f}€</td></tr>
             </table>
+            {f"""
+            <div style="margin-top:20px;padding:16px;background:#fef9c3;border-radius:10px;border:1px solid #fde68a">
+              <p style="margin:0 0 8px;font-weight:700;color:#854d0e">💳 Acompte de garantie: {deposit_amount:.2f} €</p>
+              <p style="margin:0 0 4px;font-size:13px;color:#78350f">→ Ce montant sera déduit de votre addition lors du repas.</p>
+              <p style="margin:0;font-size:13px;color:#78350f">✓ Annulation gratuite jusqu'à 24h avant la réservation.</p>
+            </div>
+            """ if deposit_amount > 0 else ""}
           </div>
           <div style="background:#faf8f5;padding:20px;text-align:center;border:1px solid #eee;border-top:none;border-radius:0 0 12px 12px">
-            <p style="margin:0 0 8px;font-size:14px"><strong>7 rue des Ursulines, 75005 Paris</strong></p>
-            <p style="margin:0 0 12px;font-size:14px">📞 01 72 60 46 89</p>
+            <p style="margin:0 0 8px;font-size:14px"><strong>75 Rue Buffon, 75005 Paris</strong></p>
+            <p style="margin:0 0 12px;font-size:14px">📞 01 72 60 48 89</p>
             <p style="margin:0;color:#8B0000;font-weight:600;font-size:15px">Merci pour votre commande ! 感谢您的订单！</p>
           </div>
         </div>
@@ -321,13 +328,56 @@ async def api_create_booking(request: Request) -> JSONResponse:
     if not namespace:
         return JSONResponse({"error": "namespace is required"}, status_code=400)
     result = db.create_booking(namespace, data)
-    if result.get("success"):
-        threading.Thread(
-            target=_send_booking_email,
-            args=(data, result.get("booking_code", "")),
-            daemon=True,
-        ).start()
-    return JSONResponse(result, status_code=201 if result.get("success") else 400)
+    if not result.get("success"):
+        return JSONResponse(result, status_code=400)
+
+    booking_id = result["booking_id"]
+    booking_code = result["booking_code"]
+    payment_required = result.get("payment_required", False)
+    deposit_amount = result.get("deposit_amount", 0)
+
+    # If deposit requested, create Stancer payment intent (mandatory — error if fails)
+    payment_url = None
+    if payment_required and deposit_amount > 0:
+        stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+        if not stancer_key or stancer_key.startswith("stest_your"):
+            return JSONResponse({"error": "payment_unavailable", "detail": "Stancer not configured"}, status_code=503)
+        auth = base64.b64encode(f"{stancer_key}:".encode()).decode()
+        return_url = f"https://jason2016.github.io/neige-rouge/#booking-success?booking_id={booking_id}&booking_code={booking_code}"
+        try:
+            resp = _req_lib.post(
+                "https://api.stancer.com/v2/payment_intents/",
+                headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+                json={
+                    "amount": int(round(deposit_amount * 100)),
+                    "currency": "eur",
+                    "description": f"Acompte reservation #{booking_code} - Neige Rouge",
+                    "return_url": return_url,
+                },
+                timeout=15,
+            )
+            pi = resp.json()
+        except Exception as exc:
+            logger.error(f"Stancer call failed for booking {booking_id}: {exc}")
+            return JSONResponse({"error": "payment_unavailable", "detail": str(exc)}, status_code=502)
+        if resp.status_code not in (200, 201) or not pi.get("url"):
+            err = pi.get("error", f"Stancer error {resp.status_code}")
+            logger.error(f"Stancer rejected booking {booking_id}: {err} | response: {pi}")
+            return JSONResponse({"error": "payment_unavailable", "detail": err}, status_code=502)
+        payment_url = pi["url"]
+        db.update_booking_deposit_payment(namespace, booking_id, pi.get("id", ""), "unpaid")
+
+    # Send confirmation email (always, even if payment pending)
+    threading.Thread(
+        target=_send_booking_email,
+        args=(data, booking_code, deposit_amount if payment_required else 0),
+        daemon=True,
+    ).start()
+
+    response = {**result}
+    if payment_url:
+        response["payment_url"] = payment_url
+    return JSONResponse(response, status_code=201)
 
 
 async def api_update_booking(request: Request) -> JSONResponse:
@@ -384,6 +434,179 @@ async def api_booking_summary(request: Request) -> JSONResponse:
     return JSONResponse(summary)
 
 
+async def api_nr_booking_verify(request: Request) -> JSONResponse:
+    """GET /api/neige-rouge/bookings/verify?booking_id=x — verify Stancer deposit payment."""
+    booking_id_str = request.query_params.get("booking_id", "")
+    namespace = request.query_params.get("namespace", "neige-rouge")
+    if not booking_id_str:
+        return JSONResponse({"error": "booking_id required"}, status_code=400)
+    booking = db.get_booking_by_id(namespace, int(booking_id_str))
+    if not booking:
+        return JSONResponse({"error": "Booking not found"}, status_code=404)
+    if booking.get("deposit_payment_status") == "paid":
+        return JSONResponse({"paid": True, "deposit_amount": booking.get("deposit_amount", 0)})
+    payment_id = booking.get("deposit_payment_id", "")
+    if not payment_id:
+        return JSONResponse({"paid": False, "status": "no_payment_id"})
+    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+    if not stancer_key or stancer_key.startswith("stest_your"):
+        return JSONResponse({"error": "Stancer not configured"}, status_code=500)
+    auth = base64.b64encode(f"{stancer_key}:".encode()).decode()
+    import time as _time_mod
+    for attempt in range(3):
+        try:
+            resp = _req_lib.get(
+                f"https://api.stancer.com/v2/payment_intents/{payment_id}",
+                headers={"Authorization": f"Basic {auth}"},
+                timeout=15,
+            )
+            result = resp.json()
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+        status = result.get("status", "")
+        paid = status in ("succeeded", "requires_capture", "paid", "captured", "to_capture", "authorized")
+        if paid:
+            db.update_booking_deposit_payment(namespace, int(booking_id_str), payment_id, "paid")
+            return JSONResponse({
+                "paid": True, "status": status,
+                "deposit_amount": booking.get("deposit_amount", 0),
+                "booking_code": booking.get("booking_code", ""),
+            })
+        if attempt < 2:
+            _time_mod.sleep(2)
+    return JSONResponse({"paid": False, "status": status})
+
+
+async def api_nr_booking_use_deposit(request: Request) -> JSONResponse:
+    """POST /api/neige-rouge/bookings/:id/use-deposit — deduct deposit from order total."""
+    booking_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "neige-rouge")
+    order_id = data.get("order_id")
+    if not order_id:
+        return JSONResponse({"error": "order_id required"}, status_code=400)
+    result = db.use_booking_deposit(namespace, booking_id, int(order_id))
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
+async def api_nr_booking_refund(request: Request) -> JSONResponse:
+    """POST /api/neige-rouge/bookings/:id/refund — refund deposit via Stancer."""
+    booking_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "neige-rouge")
+    booking = db.get_booking_by_id(namespace, booking_id)
+    if not booking:
+        return JSONResponse({"error": "Booking not found"}, status_code=404)
+    if booking.get("deposit_payment_status") != "paid":
+        return JSONResponse({"error": "Deposit not in paid status"}, status_code=400)
+    payment_id = booking.get("deposit_payment_id", "")
+    if not payment_id:
+        return JSONResponse({"error": "No payment_id on file"}, status_code=400)
+    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+    if not stancer_key or stancer_key.startswith("stest_your"):
+        return JSONResponse({"error": "Stancer not configured"}, status_code=500)
+    auth = base64.b64encode(f"{stancer_key}:".encode()).decode()
+    try:
+        resp = _req_lib.post(
+            f"https://api.stancer.com/v2/payment_intents/{payment_id}/refund",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json={},
+            timeout=15,
+        )
+        if resp.status_code not in (200, 201, 204):
+            err = resp.json() if resp.content else {}
+            return JSONResponse({"error": err.get("error", f"Stancer refund failed {resp.status_code}")}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    result = db.mark_booking_deposit_refunded(namespace, booking_id)
+    return JSONResponse({**result, "refund_amount": booking.get("deposit_amount", 0)})
+
+
+async def api_nr_booking_arrive(request: Request) -> JSONResponse:
+    """POST /api/neige-rouge/bookings/{id}/arrive — mark as arrived, create dine_order."""
+    booking_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    namespace = data.get("namespace", "neige-rouge")
+    result = db.arrive_booking(namespace, booking_id)
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
+async def api_nr_checkout(request: Request) -> JSONResponse:
+    """POST /api/neige-rouge/orders/{id}/checkout — compute amount due, create Stancer payment if needed."""
+    order_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "neige-rouge")
+
+    order = db._get_dine_order(namespace, order_id)
+    if not order:
+        return JSONResponse({"error": "Order not found"}, status_code=404)
+
+    total = float(order.get("total_amount") or 0)
+    deposit = float(order.get("deposit_applied") or 0)
+    amount_due = max(0.0, round(total - deposit, 2))
+
+    if amount_due <= 0:
+        db.update_dine_order_payment_status(namespace, order_id, "paid")
+        return JSONResponse({
+            "success": True,
+            "order_total": total,
+            "deposit_applied": deposit,
+            "amount_due": 0.0,
+            "payment_url": None,
+        })
+
+    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+    if not stancer_key or stancer_key.startswith("stest_your"):
+        return JSONResponse({"error": "Stancer not configured"}, status_code=503)
+
+    auth = base64.b64encode(f"{stancer_key}:".encode()).decode()
+    order_number = order.get("order_number", str(order_id))
+    return_url = f"https://jason2016.github.io/neige-rouge/#payment-success?order_id={order_id}"
+    try:
+        resp = _req_lib.post(
+            "https://api.stancer.com/v2/payment_intents/",
+            headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"},
+            json={
+                "amount": int(round(amount_due * 100)),
+                "currency": "eur",
+                "description": f"Neige Rouge #{order_number} (acompte {deposit:.2f}EUR deduit)",
+                "return_url": return_url,
+            },
+            timeout=15,
+        )
+        result = resp.json()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    if resp.status_code not in (200, 201):
+        return JSONResponse({"error": result.get("error", f"Stancer error {resp.status_code}")}, status_code=502)
+
+    payment_url = result.get("url", "")
+    if not payment_url:
+        return JSONResponse({"error": "No payment URL from Stancer"}, status_code=502)
+
+    db.update_dine_order_payment(namespace, order_id, result.get("id", ""), "stancer")
+    return JSONResponse({
+        "success": True,
+        "order_total": total,
+        "deposit_applied": deposit,
+        "amount_due": amount_due,
+        "payment_url": payment_url,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Dine-in order API endpoints
 # ---------------------------------------------------------------------------
@@ -437,6 +660,95 @@ async def api_order_picked(request: Request) -> JSONResponse:
         return JSONResponse({"error": "namespace is required"}, status_code=400)
     result = db.update_dine_order_status(namespace, order_id, "picked")
     return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
+async def api_order_mark_printed(request: Request) -> JSONResponse:
+    """PATCH /api/order/{id}/mark-printed — record that kitchen ticket was printed."""
+    order_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    result = db.mark_dine_order_printed(namespace, order_id)
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
+
+
+# ---------------------------------------------------------------------------
+# Neige Rouge — Receipt & Invoice PDF endpoints
+# ---------------------------------------------------------------------------
+
+from tools.neige_rouge_receipt import generate_receipt as _nr_generate_receipt
+from tools.neige_rouge_receipt import generate_invoice as _nr_generate_invoice
+from starlette.responses import Response as StarletteResponse
+
+
+async def api_nr_receipt(request: Request) -> StarletteResponse:
+    """GET /api/neige-rouge/orders/{id}/receipt — generate receipt PDF (idempotent)."""
+    order_id = int(request.path_params["id"])
+    namespace = request.query_params.get("namespace", "neige-rouge")
+    try:
+        receipt_number = db.get_or_assign_nr_receipt_number(namespace, order_id)
+        order = db._get_dine_order(namespace, order_id)
+        if not order:
+            return JSONResponse({"error": "Order not found"}, status_code=404)
+        order["receipt_number"] = receipt_number
+        pdf_bytes = _nr_generate_receipt(order)
+        filename = f"recu-{receipt_number}.pdf"
+        return StarletteResponse(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+async def api_nr_invoice_get(request: Request) -> JSONResponse:
+    """GET /api/neige-rouge/orders/{id}/invoice — check if invoice exists."""
+    order_id = int(request.path_params["id"])
+    namespace = request.query_params.get("namespace", "neige-rouge")
+    record = db.get_nr_invoice_record(namespace, order_id)
+    if not record:
+        return JSONResponse({"exists": False}, status_code=200)
+    return JSONResponse({"exists": True, "invoice_number": record["invoice_number"], "client_company": record["client_company"]})
+
+
+async def api_nr_invoice_post(request: Request) -> StarletteResponse:
+    """POST /api/neige-rouge/orders/{id}/invoice — create (or re-download) invoice PDF."""
+    order_id = int(request.path_params["id"])
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "neige-rouge")
+    client_company = data.get("client_company", "").strip()
+    client_address = data.get("client_address", "").strip()
+    client_vat_number = data.get("client_vat_number", "").strip()
+    if not client_company or not client_address:
+        return JSONResponse({"error": "client_company and client_address are required"}, status_code=400)
+    try:
+        record = db.create_nr_invoice_record(namespace, order_id, client_company, client_address, client_vat_number)
+        order = db._get_dine_order(namespace, order_id)
+        if not order:
+            return JSONResponse({"error": "Order not found"}, status_code=404)
+        pdf_bytes = _nr_generate_invoice(
+            order,
+            client_company=record["client_company"],
+            client_address=record["client_address"],
+            client_vat_number=record.get("client_vat_number", ""),
+            invoice_number=record["invoice_number"],
+        )
+        filename = f"facture-{record['invoice_number']}.pdf"
+        return StarletteResponse(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 import base64
@@ -1973,10 +2285,23 @@ async def de_get_orders(request: Request) -> JSONResponse:
     status = request.query_params.get("status", "")
     date = request.query_params.get("date", "")
     order_number = request.query_params.get("order_number", "")
+    order_type = request.query_params.get("order_type", "")
     cid_str = request.query_params.get("customer_id", "")
     customer_id = int(cid_str) if cid_str.isdigit() else None
-    orders = _de_db.query_orders(status=status, date=date, customer_id=customer_id, order_number=order_number)
+    orders = _de_db.query_orders(
+        status=status, date=date, customer_id=customer_id,
+        order_number=order_number, order_type=order_type,
+    )
     return JSONResponse({"orders": orders, "total": len(orders)})
+
+
+async def de_get_stats(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/stats?date=YYYY-MM-DD"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    from datetime import date as _date
+    date = request.query_params.get("date", _date.today().isoformat())
+    return JSONResponse(_de_db.get_stats(date))
 
 
 async def de_get_order(request: Request) -> JSONResponse:
@@ -2002,14 +2327,37 @@ async def de_update_order(request: Request) -> JSONResponse:
     new_status = data.get("status", "")
     if not new_status:
         return JSONResponse({"error": "status required"}, status_code=400)
+    changed_by = data.get("changed_by", "system")
     old_order = _de_db.get_order_by_id(order_id)
     if not old_order:
         return JSONResponse({"error": "Order not found"}, status_code=404)
-    order = _de_db.update_order_status(order_id, new_status)
+    order = _de_db.update_order_status(order_id, new_status, changed_by=changed_by)
     if new_status == "paid" and old_order.get("status") != "paid":
         _de_db.apply_cashback(order_id)
         order = _de_db.get_order_by_id(order_id)
     return JSONResponse(order)
+
+
+async def de_track_order(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/orders/track/{order_number}"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    order_number = request.path_params["order_number"]
+    order = _de_db.get_order_tracking(order_number)
+    if not order:
+        return JSONResponse({"error": "Order not found"}, status_code=404)
+    return JSONResponse(order)
+
+
+async def de_delivery_config(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/delivery-config"""
+    return JSONResponse({
+        "base_fee": 5.00,
+        "free_threshold": 50.00,
+        "max_distance_km": 5,
+        "restaurant_lat": 48.8738,
+        "restaurant_lng": 2.3065,
+    })
 
 
 # ── Balance endpoints ──
@@ -2135,6 +2483,7 @@ def _build_app() -> Starlette:
             Route("/api/order/{id:int}/complete", api_order_complete, methods=["PATCH"]),
             Route("/api/order/{id:int}/confirm-payment", api_order_confirm_payment, methods=["POST"]),
             Route("/api/order/{id:int}/picked", api_order_picked, methods=["PATCH"]),
+            Route("/api/order/{id:int}/mark-printed", api_order_mark_printed, methods=["PATCH"]),
             Route("/api/payment/create", api_payment_create, methods=["POST"]),
             Route("/api/payment/verify", api_payment_verify, methods=["GET"]),
             Route("/esign/create", esign_create, methods=["POST"]),
@@ -2152,12 +2501,25 @@ def _build_app() -> Starlette:
             Route("/api/dragons-elysees/auth/me", de_me, methods=["GET"]),
             Route("/api/dragons-elysees/orders", de_get_orders, methods=["GET"]),
             Route("/api/dragons-elysees/orders", de_create_order, methods=["POST"]),
+            Route("/api/dragons-elysees/orders/track/{order_number}", de_track_order, methods=["GET"]),
             Route("/api/dragons-elysees/orders/{id:int}", de_get_order, methods=["GET"]),
             Route("/api/dragons-elysees/orders/{id:int}", de_update_order, methods=["PATCH"]),
+            Route("/api/dragons-elysees/delivery-config", de_delivery_config, methods=["GET"]),
             Route("/api/dragons-elysees/balance/transactions", de_get_transactions, methods=["GET"]),
             Route("/api/dragons-elysees/balance", de_get_balance, methods=["GET"]),
+            Route("/api/dragons-elysees/stats", de_get_stats, methods=["GET"]),
             Route("/api/dragons-elysees/payment/create", de_payment_create, methods=["POST"]),
             Route("/api/dragons-elysees/payment/webhook", de_payment_webhook, methods=["POST"]),
+            # Neige Rouge 红雪餐厅 — receipts & invoices
+            Route("/api/neige-rouge/orders/{id:int}/receipt", api_nr_receipt, methods=["GET"]),
+            Route("/api/neige-rouge/orders/{id:int}/invoice", api_nr_invoice_get, methods=["GET"]),
+            Route("/api/neige-rouge/orders/{id:int}/invoice", api_nr_invoice_post, methods=["POST"]),
+            # Neige Rouge 红雪餐厅 — booking deposit & arrive
+            Route("/api/neige-rouge/bookings/verify", api_nr_booking_verify, methods=["GET"]),
+            Route("/api/neige-rouge/bookings/{id:int}/arrive", api_nr_booking_arrive, methods=["POST"]),
+            Route("/api/neige-rouge/bookings/{id:int}/use-deposit", api_nr_booking_use_deposit, methods=["POST"]),
+            Route("/api/neige-rouge/bookings/{id:int}/refund", api_nr_booking_refund, methods=["POST"]),
+            Route("/api/neige-rouge/orders/{id:int}/checkout", api_nr_checkout, methods=["POST"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
