@@ -16,8 +16,11 @@ import resend
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "https://app.clawshow.ai")
+BASE_API_URL = os.environ.get("BASE_API_URL", "https://esign-api.clawshow.ai")
+BASE_APP_URL = os.environ.get("BASE_APP_URL", "https://app.clawshow.ai")
 MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "https://mcp.clawshow.ai")
+# Keep APP_BASE_URL as alias so other modules that imported it still work
+APP_BASE_URL = BASE_APP_URL
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 SESSION_DOMAIN = os.environ.get("SESSION_DOMAIN", ".clawshow.ai")
 SESSION_TTL_DAYS = 30
@@ -59,7 +62,7 @@ def _create_login_token(cursor: sqlite3.Cursor, email: str) -> str:
 
 def _send_magic_link_email(email: str, token: str, is_founding_welcome: bool = False) -> None:
     resend.api_key = RESEND_API_KEY
-    link = f"{APP_BASE_URL}/auth/verify?token={token}"
+    link = f"{BASE_API_URL}/auth/verify?token={token}"
 
     if is_founding_welcome:
         subject = "Welcome to ClawShow — Your Founding Customer Access"
@@ -83,7 +86,9 @@ def _send_magic_link_email(email: str, token: str, is_founding_welcome: bool = F
 <p style="color:#666;font-size:12px;">This link expires in 15 minutes. If you didn't request this, ignore this email.</p>
 """
 
-    from_addr = os.environ.get("RESEND_FROM", "ClawShow <onboarding@resend.dev>")
+    _resend_email = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+    _resend_name = os.environ.get("RESEND_FROM_NAME", "ClawShow")
+    from_addr = f"{_resend_name} <{_resend_email}>"
     resend.Emails.send({
         "from": from_addr,
         "to": email,
