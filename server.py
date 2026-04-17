@@ -2116,6 +2116,49 @@ async def esign_decline(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+async def esign_documents_recent(request: Request) -> JSONResponse:
+    """GET /esign-documents/recent?namespace=x&limit=10 — dashboard recent activity."""
+    namespace = request.query_params.get("namespace", "")
+    if not namespace:
+        # Try session cookie fallback
+        from tools.auth import get_session_user
+        user = get_session_user(request)
+        if user:
+            with db.get_conn() as conn:
+                row = conn.execute(
+                    "SELECT namespace FROM user_namespaces WHERE user_id = ? LIMIT 1",
+                    (user["id"],),
+                ).fetchone()
+                if row:
+                    namespace = row[0]
+    if not namespace:
+        return JSONResponse({"error": "namespace required"}, status_code=400)
+    limit = min(int(request.query_params.get("limit", 10)), 50)
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            """SELECT id, reference_id, signer_name, signer_email,
+                      status, created_at, signed_at, completed_at
+               FROM esign_documents
+               WHERE namespace = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (namespace, limit),
+        ).fetchall()
+    return JSONResponse([
+        {
+            "id": r[0],
+            "reference_id": r[1] or "",
+            "signer_name": r[2] or "",
+            "signer_email": r[3] or "",
+            "status": r[4] or "",
+            "created_at": r[5] or "",
+            "signed_at": r[6],
+            "completed_at": r[7],
+        }
+        for r in rows
+    ])
+
+
 async def esign_status(request: Request) -> JSONResponse:
     """GET /esign/{document_id}/status — return current signing status with signers."""
     doc_id = request.path_params["document_id"]
@@ -2561,6 +2604,7 @@ def _build_app() -> Starlette:
             Route("/api/order/{id:int}/mark-printed", api_order_mark_printed, methods=["PATCH"]),
             Route("/api/payment/create", api_payment_create, methods=["POST"]),
             Route("/api/payment/verify", api_payment_verify, methods=["GET"]),
+            Route("/esign-documents/recent", esign_documents_recent, methods=["GET"]),
             Route("/esign/create", esign_create, methods=["POST"]),
             Route("/esign/{document_id}/page/{page_num}.png", esign_page_image, methods=["GET"]),
             Route("/esign/{document_id}/sign", esign_submit_signature, methods=["POST"]),
