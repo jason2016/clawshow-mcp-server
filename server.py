@@ -45,6 +45,12 @@ from starlette.routing import Mount, Route
 
 from mcp.server.fastmcp import FastMCP
 
+# SaaS auth / accounts / subscriptions / api-keys
+from tools.auth import auth_request_login, auth_verify, auth_logout
+from tools.accounts import accounts_me, accounts_create, accounts_get, internal_invite_founding
+from tools.subscriptions import subscriptions_current, subscriptions_upgrade_intent
+from tools.api_keys import api_keys_create, api_keys_list, api_keys_revoke
+
 # ---------------------------------------------------------------------------
 # Server init
 # ---------------------------------------------------------------------------
@@ -1699,6 +1705,22 @@ async def esign_create(request: Request) -> JSONResponse:
     send_email = body.get("send_email", True)
     signature_fields = body.get("signature_fields") or body.get("fields_config")
 
+    # Quota check — skip for 'demo' namespace (testing/internal)
+    if namespace != "demo":
+        from tools.subscriptions import check_quota, increment_usage
+        import sqlite3 as _sqlite3
+        _qconn = _sqlite3.connect(str(db.DB_PATH))
+        _qconn.row_factory = _sqlite3.Row
+        _qcur = _qconn.cursor()
+        _quota = check_quota(namespace, _qcur)
+        if not _quota.allowed:
+            _qconn.close()
+            return JSONResponse(
+                {"error": _quota.reason or "Envelope quota exceeded", "quota_exceeded": True},
+                status_code=402,
+            )
+        _qconn.close()
+
     doc_id = _next_doc_id(namespace)
     pdf_preview_url = f"{MCP_BASE_URL}/esign/{doc_id}/preview.pdf"
     html_path = ""
@@ -1830,6 +1852,21 @@ async def esign_create(request: Request) -> JSONResponse:
         "file_url": file_url or None,
         "signers_count": len(signers_raw),
     })
+
+    # Record usage event (skip for demo namespace)
+    if namespace != "demo":
+        try:
+            from tools.subscriptions import check_quota, increment_usage
+            import sqlite3 as _sqlite3
+            _uconn = _sqlite3.connect(str(db.DB_PATH))
+            _uconn.row_factory = _sqlite3.Row
+            _ucur = _uconn.cursor()
+            _q = check_quota(namespace, _ucur)
+            increment_usage(namespace, doc_id, _ucur, is_overage=_q.is_overage, overage_rate_cents=_q.overage_rate_cents)
+            _uconn.commit()
+            _uconn.close()
+        except Exception:
+            pass  # usage tracking failure must never block document creation
 
     if send_email and signer_email:
         _th.Thread(
@@ -2559,6 +2596,22 @@ def _build_app() -> Starlette:
             Route("/api/neige-rouge/bookings/{id:int}/use-deposit", api_nr_booking_use_deposit, methods=["POST"]),
             Route("/api/neige-rouge/bookings/{id:int}/refund", api_nr_booking_refund, methods=["POST"]),
             Route("/api/neige-rouge/orders/{id:int}/checkout", api_nr_checkout, methods=["POST"]),
+            # ClawShow SaaS — auth
+            Route("/auth/request-login", auth_request_login, methods=["POST"]),
+            Route("/auth/verify",        auth_verify,         methods=["GET"]),
+            Route("/auth/logout",        auth_logout,         methods=["POST"]),
+            # ClawShow SaaS — accounts (namespace management)
+            Route("/accounts/me",            accounts_me,             methods=["GET"]),
+            Route("/accounts",               accounts_create,         methods=["POST"]),
+            Route("/accounts/{namespace}",   accounts_get,            methods=["GET"]),
+            Route("/internal/invite-founding", internal_invite_founding, methods=["POST"]),
+            # ClawShow SaaS — subscriptions & quota
+            Route("/subscriptions/current",        subscriptions_current,         methods=["GET"]),
+            Route("/subscriptions/upgrade-intent", subscriptions_upgrade_intent,  methods=["POST"]),
+            # ClawShow SaaS — API keys
+            Route("/api-keys",       api_keys_create, methods=["POST"]),
+            Route("/api-keys",       api_keys_list,   methods=["GET"]),
+            Route("/api-keys/{id}",  api_keys_revoke, methods=["DELETE"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
@@ -2569,11 +2622,13 @@ def _build_app() -> Starlette:
                     "https://clawshow.ai",
                     "https://www.clawshow.ai",
                     "https://mcp.clawshow.ai",
+                    "https://app.clawshow.ai",
                     "http://localhost:5173",
                     "http://localhost:3000",
                 ],
-                allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+                allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
                 allow_headers=["*"],
+                allow_credentials=True,
             )
         ],
     )
