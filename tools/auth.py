@@ -83,8 +83,9 @@ def _send_magic_link_email(email: str, token: str, is_founding_welcome: bool = F
 <p style="color:#666;font-size:12px;">This link expires in 15 minutes. If you didn't request this, ignore this email.</p>
 """
 
+    from_addr = os.environ.get("RESEND_FROM", "ClawShow <onboarding@resend.dev>")
     resend.Emails.send({
-        "from": "ClawShow <noreply@clawshow.ai>",
+        "from": from_addr,
         "to": email,
         "subject": subject,
         "html": html,
