@@ -29,7 +29,7 @@ NEW_NAMESPACE_COLUMNS = [
     ("overage_rate_cents",          "INTEGER DEFAULT 0"),
     ("is_founding_customer",        "BOOLEAN DEFAULT FALSE"),
     ("price_lock_until",            "TIMESTAMP"),
-    ("updated_at",                  "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+    ("updated_at",                  "TIMESTAMP"),
 ]
 
 
