@@ -2601,12 +2601,92 @@ async def de_payment_webhook(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Documentation page
+# ---------------------------------------------------------------------------
+
+_DOCS_DIR = Path(__file__).parent / "docs"
+
+
+async def serve_docs_esign(request: Request):
+    """GET /docs/esign — render esign API reference as HTML."""
+    from starlette.responses import HTMLResponse
+    md_path = _DOCS_DIR / "esign-api-reference.md"
+    if not md_path.exists():
+        return HTMLResponse("<p>Documentation not found.</p>", status_code=404)
+    md_content = md_path.read_text(encoding="utf-8")
+    # Escape for JS string embedding
+    md_escaped = md_content.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ClawShow eSign API Reference</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"/>
+<style>
+  body{{background:#fff;margin:0;padding:0}}
+  .page-wrap{{max-width:900px;margin:0 auto;padding:32px 24px 80px}}
+  .topbar{{background:#0f172a;padding:12px 24px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}}
+  .topbar-brand{{color:#fff;font-weight:700;font-size:16px;text-decoration:none}}
+  .topbar-badge{{font-size:11px;background:rgba(59,130,246,0.25);color:#93c5fd;padding:2px 8px;border-radius:99px;border:1px solid rgba(59,130,246,0.3)}}
+  .topbar-link{{color:#94a3b8;font-size:13px;text-decoration:none;margin-left:auto}}
+  .topbar-link:hover{{color:#fff}}
+  .markdown-body{{padding:0}}
+  .markdown-body pre{{border-radius:8px}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <a class="topbar-brand" href="https://clawshow.ai">ClawShow</a>
+  <span class="topbar-badge">eSign API</span>
+  <a class="topbar-link" href="https://app.clawshow.ai">Dashboard →</a>
+</div>
+<div class="page-wrap">
+  <div class="markdown-body" id="content"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+const md = `{md_escaped}`;
+marked.setOptions({{
+  highlight: (code, lang) => {{
+    if(lang && hljs.getLanguage(lang)) return hljs.highlight(code, {{language:lang}}).value;
+    return hljs.highlightAuto(code).value;
+  }},
+  breaks: false,
+  gfm: true,
+}});
+document.getElementById('content').innerHTML = marked.parse(md);
+document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+</script>
+</body>
+</html>"""
+    return HTMLResponse(html)
+
+
+async def serve_docs_esign_md(request: Request):
+    """GET /docs/esign-api-reference.md — raw markdown download."""
+    from starlette.responses import Response
+    md_path = _DOCS_DIR / "esign-api-reference.md"
+    if not md_path.exists():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return Response(
+        content=md_path.read_text(encoding="utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": "inline; filename=\"esign-api-reference.md\""},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
 
 def _build_app() -> Starlette:
     return Starlette(
         routes=[
+            Route("/docs/esign", serve_docs_esign, methods=["GET"]),
+            Route("/docs/esign-api-reference.md", serve_docs_esign_md, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
             Route("/reports/{namespace}/{filename}", serve_report, methods=["GET"]),
