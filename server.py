@@ -993,7 +993,7 @@ button{cursor:pointer}
 .cbrow input[type=checkbox]{width:16px;height:16px;margin-top:2px;flex-shrink:0;cursor:pointer}
 .cbrow label{font-size:14px;color:#333;line-height:1.45;cursor:pointer}
 .cvwrap{border:1px solid #ddd;border-radius:6px;background:#fafafa;position:relative}
-.cvwrap canvas{display:block;cursor:crosshair}
+.cvwrap canvas{display:block;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 21l5-2L20 7a2 2 0 00-3-3L5 16z' fill='%23333' stroke='%23fff' stroke-width='0.5'/><path d='M3 21l2-1-1-1z' fill='%23555'/></svg>") 3 21,crosshair}
 .cv-clr{position:absolute;top:5px;right:8px;border:none;background:transparent;font-size:12px;color:#999;padding:2px 6px}
 .use-saved-btn{margin-top:6px;padding:5px 10px;border:1px solid #1976d2;background:#e3f2fd;color:#1976d2;border-radius:5px;font-size:12px}
 /* MODALS */
@@ -1016,7 +1016,7 @@ button{cursor:pointer}
 #typePrev{border:1px solid #e0e0e0;border-radius:6px;height:68px;background:#fafafa;overflow:hidden;margin-bottom:10px;display:flex;align-items:center;justify-content:center}
 #typePrevCv{max-width:100%}
 .draw-wrap{border:1px solid #ddd;border-radius:6px;background:#fafafa;margin-bottom:6px}
-#drawCv{width:100%;display:block;height:120px;cursor:crosshair}
+#drawCv{width:100%;display:block;height:120px;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 21l5-2L20 7a2 2 0 00-3-3L5 16z' fill='%23333' stroke='%23fff' stroke-width='0.5'/><path d='M3 21l2-1-1-1z' fill='%23555'/></svg>") 3 21,crosshair}
 .cv-hint{font-size:12px;color:#aaa;text-align:center;margin-bottom:10px}
 .upload-zone{border:2px dashed #ccc;border-radius:8px;padding:24px;text-align:center;background:#fafafa;cursor:pointer;margin-bottom:10px}
 .upload-zone:hover{border-color:#1976d2;background:#f0f7ff}
@@ -1116,6 +1116,9 @@ button{cursor:pointer}
       <div class="color-row" id="dColRow"></div>
       <div class="draw-wrap"><canvas id="drawCv" height="120"></canvas></div>
       <p class="cv-hint" id="cvHint"></p>
+      <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:4px">
+        <button class="btn-sec" id="undoBtn" onclick="undoDraw()" style="font-size:12px;padding:4px 10px">↩ Undo</button>
+      </div>
     </div>
     <div class="tp" id="tpImg">
       <div class="upload-zone" onclick="document.getElementById('imgFile').click()">
@@ -1291,7 +1294,7 @@ function chkBtn(){
 }
 function clrSetup(){
   document.getElementById('typeName').value='';
-  if(S.dCtx){const c=document.getElementById('drawCv');S.dCtx.clearRect(0,0,c.width,c.height);}
+  if(S.dCtx){const c=document.getElementById('drawCv');S.dCtx.clearRect(0,0,c.width,c.height);c._strokes=[];}
   S.drawHas=false;S.imgData=null;
   document.getElementById('imgPrev').style.display='none';
   drawTyped();chkBtn();
@@ -1396,13 +1399,15 @@ function onFF(){
 function szCv(cv){const w=(cv.parentElement?cv.parentElement.offsetWidth:320)||320;const h=cv.height||90;cv.width=w;cv.height=h;}
 function attachDraw(cv,ctx,onDraw,getColor){
   let drawing=false,lx=0,ly=0;
+  cv._strokes=[];
   function pos(e){const r=cv.getBoundingClientRect(),s=e.touches?e.touches[0]:e;return[s.clientX-r.left,s.clientY-r.top];}
-  function dn(e){e.preventDefault();[lx,ly]=pos(e);drawing=true;}
+  function dn(e){e.preventDefault();[lx,ly]=pos(e);drawing=true;cv._strokes.push({color:getColor(),pts:[[lx,ly]]});}
   function mv(e){
     if(!drawing)return;e.preventDefault();
     const[x,y]=pos(e);
     ctx.beginPath();ctx.moveTo(lx,ly);ctx.quadraticCurveTo(lx,ly,(lx+x)/2,(ly+y)/2);
     ctx.strokeStyle=getColor();ctx.lineWidth=2;ctx.lineCap='round';ctx.stroke();
+    if(cv._strokes.length)cv._strokes[cv._strokes.length-1].pts.push([x,y]);
     [lx,ly]=[x,y];if(onDraw)onDraw();
   }
   function up(){drawing=false;}
@@ -1410,6 +1415,21 @@ function attachDraw(cv,ctx,onDraw,getColor){
   cv.addEventListener('mouseup',up);cv.addEventListener('mouseleave',up);
   cv.addEventListener('touchstart',dn,{passive:false});cv.addEventListener('touchmove',mv,{passive:false});
   cv.addEventListener('touchend',up);
+}
+function undoDraw(){
+  const cv=document.getElementById('drawCv');
+  if(!cv._strokes||!cv._strokes.length)return;
+  cv._strokes.pop();
+  const ctx=S.dCtx;ctx.clearRect(0,0,cv.width,cv.height);
+  cv._strokes.forEach(stroke=>{
+    if(stroke.pts.length<2)return;
+    ctx.strokeStyle=stroke.color;ctx.lineWidth=2;ctx.lineCap='round';
+    for(let i=1;i<stroke.pts.length;i++){
+      const[lx,ly]=stroke.pts[i-1],[x,y]=stroke.pts[i];
+      ctx.beginPath();ctx.moveTo(lx,ly);ctx.quadraticCurveTo(lx,ly,(lx+x)/2,(ly+y)/2);ctx.stroke();
+    }
+  });
+  S.drawHas=cv._strokes.length>0;chkBtn();
 }
 
 /* ---- MORE ACTIONS ---- */
