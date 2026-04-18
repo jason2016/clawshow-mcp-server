@@ -569,13 +569,60 @@ Authorization: Bearer <YOUR_CLAWSHOW_API_KEY>
 
 ## Webhooks
 
-When you include a `callback_url` in your `POST /esign/create` request, ClawShow sends an HTTP POST to that URL when the document is signed or declined.
+ClawShow sends an HTTP POST to your webhook URL when a document is signed or declined.
 
 ### Configuration
 
-Webhooks are configured **per document**, not globally. Pass `callback_url` in the create request body. There is no separate webhook management UI or API in the current version.
+There are two ways to configure a webhook URL — use whichever fits your integration:
 
-> **Roadmap 🔜** — Dashboard-level webhook configuration (apply to all documents in a namespace) is planned.
+#### Option A — Namespace-level (recommended)
+
+Configure once in **Dashboard → Settings → Webhook**. All documents in your namespace will fire to this URL automatically. No changes needed per API call.
+
+```
+Dashboard: https://app.clawshow.ai/settings
+Section: Webhook
+Input: https://your-server.com/webhooks/esign
+```
+
+You can also set it via API:
+
+```http
+PATCH /webhooks/config
+Authorization: Bearer <YOUR_CLAWSHOW_API_KEY>
+Content-Type: application/json
+
+{
+  "namespace": "your-namespace",
+  "webhook_url": "https://your-server.com/webhooks/esign"
+}
+```
+
+Response:
+```json
+{
+  "namespace": "your-namespace",
+  "webhook_url": "https://your-server.com/webhooks/esign",
+  "updated": true
+}
+```
+
+To read the current config:
+```http
+GET /webhooks/config?namespace=your-namespace
+Authorization: Bearer <YOUR_CLAWSHOW_API_KEY>
+```
+
+To remove it, send an empty string:
+```json
+{ "namespace": "your-namespace", "webhook_url": "" }
+```
+
+#### Option B — Per-document override
+
+Pass `callback_url` in the `POST /esign/create` body. This takes priority over the namespace-level URL for that specific document.
+
+**Priority:** per-document `callback_url` → namespace-level `webhook_url`
 
 ### Events
 
@@ -880,7 +927,6 @@ The following features are planned but not yet available:
 | 🔜 Extended webhook retries | 5-attempt retry schedule with exponential backoff |
 | 🔜 HMAC webhook signatures | `X-ClawShow-Signature` header for request verification |
 | 🔜 Webhook management API | `GET/POST/DELETE /webhooks` endpoints |
-| 🔜 Namespace-level webhook config | One webhook URL for all documents in a namespace |
 | 🔜 `DELETE /esign/{id}` | Void / retract unsigned documents |
 | 🔜 `POST /esign/{id}/resend` | Resend the signing email |
 | 🔜 `POST /esign/{id}/extend` | Extend document expiration |
@@ -936,6 +982,10 @@ AES — Advanced Electronic Signature, eIDAS Article 26. Suitable for most comme
 ---
 
 ## Changelog
+
+### v1.10.2 — 2026-04-18
+- Namespace-level webhook configuration (Dashboard Settings + PATCH /webhooks/config)
+- Per-document callback_url now falls back to namespace webhook if not set
 
 ### v1.10.1 — 2026-04-18
 - Pen cursor restored in signature pad

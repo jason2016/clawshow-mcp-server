@@ -50,6 +50,7 @@ from tools.auth import auth_request_login, auth_verify, auth_logout
 from tools.accounts import accounts_me, accounts_create, accounts_get, internal_invite_founding
 from tools.subscriptions import subscriptions_current, subscriptions_upgrade_intent
 from tools.api_keys import api_keys_create, api_keys_list, api_keys_revoke
+from tools.webhooks import webhooks_config_get, webhooks_config_patch
 
 # ---------------------------------------------------------------------------
 # Server init
@@ -2053,10 +2054,13 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
 
     signed_pdf_url = f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf"
 
+    # Resolve effective callback URL: per-doc > namespace-level
     callback_url = doc.get("callback_url", "")
-    if callback_url:
-        signers_info = db.get_signers_by_document(doc_id)
+    if not callback_url:
+        from tools.webhooks import get_namespace_webhook_url
+        callback_url = get_namespace_webhook_url(namespace) or ""
 
+    if callback_url:
         def _fire_callback():
             import requests as _r
             payload = {
@@ -2756,6 +2760,9 @@ def _build_app() -> Starlette:
             Route("/api-keys",       api_keys_create, methods=["POST"]),
             Route("/api-keys",       api_keys_list,   methods=["GET"]),
             Route("/api-keys/{id}",  api_keys_revoke, methods=["DELETE"]),
+            # ClawShow SaaS — webhook config
+            Route("/webhooks/config", webhooks_config_get,   methods=["GET"]),
+            Route("/webhooks/config", webhooks_config_patch, methods=["PATCH"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[
