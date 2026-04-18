@@ -2612,13 +2612,12 @@ _DOCS_DIR = Path(__file__).parent / "docs"
 
 
 async def serve_docs_esign(request: Request):
-    """GET /docs/esign — render esign API reference as HTML."""
+    """GET /docs/esign — render esign API reference as HTML with sidebar TOC."""
     from starlette.responses import HTMLResponse
     md_path = _DOCS_DIR / "esign-api-reference.md"
     if not md_path.exists():
         return HTMLResponse("<p>Documentation not found.</p>", status_code=404)
     md_content = md_path.read_text(encoding="utf-8")
-    # Escape for JS string embedding
     md_escaped = md_content.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -2629,15 +2628,44 @@ async def serve_docs_esign(request: Request):
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown-light.min.css"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"/>
 <style>
-  body{{background:#fff;margin:0;padding:0}}
-  .page-wrap{{max-width:900px;margin:0 auto;padding:32px 24px 80px}}
-  .topbar{{background:#0f172a;padding:12px 24px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}}
-  .topbar-brand{{color:#fff;font-weight:700;font-size:16px;text-decoration:none}}
-  .topbar-badge{{font-size:11px;background:rgba(59,130,246,0.25);color:#93c5fd;padding:2px 8px;border-radius:99px;border:1px solid rgba(59,130,246,0.3)}}
-  .topbar-link{{color:#94a3b8;font-size:13px;text-decoration:none;margin-left:auto}}
-  .topbar-link:hover{{color:#fff}}
-  .markdown-body{{padding:0}}
-  .markdown-body pre{{border-radius:8px}}
+*{{box-sizing:border-box}}
+body{{margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}
+/* TOP BAR */
+.topbar{{background:#0f172a;padding:0 24px;height:48px;display:flex;align-items:center;gap:12px;position:fixed;top:0;left:0;right:0;z-index:100}}
+.topbar-brand{{color:#fff;font-weight:700;font-size:15px;text-decoration:none}}
+.topbar-badge{{font-size:11px;background:rgba(59,130,246,0.25);color:#93c5fd;padding:2px 8px;border-radius:99px;border:1px solid rgba(59,130,246,0.3)}}
+.topbar-link{{color:#94a3b8;font-size:13px;text-decoration:none;margin-left:auto}}
+.topbar-link:hover{{color:#fff}}
+/* LAYOUT */
+.layout{{display:flex;padding-top:48px;min-height:100vh}}
+/* SIDEBAR */
+.sidebar{{width:256px;flex-shrink:0;background:#fff;border-right:1px solid #e2e8f0;position:fixed;top:48px;bottom:0;overflow-y:auto;padding:20px 0}}
+.sidebar::-webkit-scrollbar{{width:4px}}
+.sidebar::-webkit-scrollbar-track{{background:transparent}}
+.sidebar::-webkit-scrollbar-thumb{{background:#cbd5e1;border-radius:2px}}
+.toc-section{{margin-bottom:4px}}
+.toc-h2{{display:flex;align-items:center;gap:6px;padding:6px 16px;font-size:13px;font-weight:600;color:#334155;text-decoration:none;cursor:pointer;border-left:3px solid transparent;transition:all .15s}}
+.toc-h2:hover{{background:#f1f5f9;color:#1e293b}}
+.toc-h2.active{{color:#2563eb;border-left-color:#2563eb;background:#eff6ff}}
+.toc-h2 .arrow{{font-size:10px;color:#94a3b8;margin-left:auto;transition:transform .15s}}
+.toc-h2.open .arrow{{transform:rotate(90deg)}}
+.toc-children{{overflow:hidden;max-height:0;transition:max-height .2s ease}}
+.toc-children.open{{max-height:600px}}
+.toc-h3{{display:block;padding:4px 16px 4px 28px;font-size:12px;color:#64748b;text-decoration:none;border-left:3px solid transparent;transition:all .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.toc-h3:hover{{background:#f8fafc;color:#334155}}
+.toc-h3.active{{color:#2563eb;border-left-color:#2563eb;background:#eff6ff}}
+/* CONTENT */
+.main{{margin-left:256px;flex:1;padding:40px 48px 80px;max-width:960px}}
+.markdown-body{{background:transparent;padding:0}}
+.markdown-body pre{{border-radius:8px}}
+.markdown-body h1,.markdown-body h2,.markdown-body h3{{scroll-margin-top:72px}}
+.markdown-body h2{{border-top:1px solid #e2e8f0;padding-top:32px;margin-top:40px}}
+.markdown-body h2:first-child{{border-top:none;padding-top:0;margin-top:0}}
+/* MOBILE */
+@media(max-width:768px){{
+  .sidebar{{display:none}}
+  .main{{margin-left:0;padding:24px 16px 60px}}
+}}
 </style>
 </head>
 <body>
@@ -2646,23 +2674,120 @@ async def serve_docs_esign(request: Request):
   <span class="topbar-badge">eSign API</span>
   <a class="topbar-link" href="https://app.clawshow.ai">Dashboard →</a>
 </div>
-<div class="page-wrap">
-  <div class="markdown-body" id="content"></div>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="markdown-body" id="content"></div>
+  </main>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script>
 const md = `{md_escaped}`;
-marked.setOptions({{
-  highlight: (code, lang) => {{
-    if(lang && hljs.getLanguage(lang)) return hljs.highlight(code, {{language:lang}}).value;
-    return hljs.highlightAuto(code).value;
-  }},
-  breaks: false,
-  gfm: true,
-}});
+
+// Slug helper matching marked's default
+function slug(text){{
+  return text.toLowerCase().replace(/[^\w\s-]/g,'').replace(/\s+/g,'-').replace(/-+/g,'-');
+}}
+
+// Custom renderer: add id anchors to headings
+const renderer = new marked.Renderer();
+renderer.heading = function(text, level){{
+  const id = slug(text.replace(/<[^>]*>/g,''));
+  return `<h${{level}} id="${{id}}">${{text}}</h${{level}}>\n`;
+}};
+renderer.code = function(code, lang){{
+  const hl = lang && hljs.getLanguage(lang)
+    ? hljs.highlight(code, {{language:lang}}).value
+    : hljs.highlightAuto(code).value;
+  return `<pre><code class="hljs language-${{lang||''}}">${{hl}}</code></pre>\n`;
+}};
+
+marked.use({{renderer, gfm:true, breaks:false}});
 document.getElementById('content').innerHTML = marked.parse(md);
-document.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+
+// Build sidebar TOC from rendered headings
+const headings = Array.from(document.querySelectorAll('#content h2, #content h3'));
+const sidebar = document.getElementById('sidebar');
+let currentSection = null;
+let currentChildren = null;
+
+headings.forEach(h => {{
+  if(h.tagName === 'H2'){{
+    const sec = document.createElement('div');
+    sec.className = 'toc-section';
+    const a = document.createElement('a');
+    a.className = 'toc-h2';
+    a.href = '#' + h.id;
+    a.dataset.id = h.id;
+    a.innerHTML = h.textContent + '<span class="arrow">›</span>';
+    const children = document.createElement('div');
+    children.className = 'toc-children';
+    a.addEventListener('click', e => {{
+      e.preventDefault();
+      // Toggle children
+      const isOpen = children.classList.contains('open');
+      children.classList.toggle('open', !isOpen);
+      a.classList.toggle('open', !isOpen);
+      // Scroll to heading
+      document.getElementById(h.id)?.scrollIntoView({{behavior:'smooth',block:'start'}});
+    }});
+    sec.appendChild(a);
+    sec.appendChild(children);
+    sidebar.appendChild(sec);
+    currentSection = a;
+    currentChildren = children;
+  }} else if(h.tagName === 'H3' && currentChildren){{
+    const a = document.createElement('a');
+    a.className = 'toc-h3';
+    a.href = '#' + h.id;
+    a.dataset.id = h.id;
+    a.textContent = h.textContent;
+    a.addEventListener('click', e => {{
+      e.preventDefault();
+      document.getElementById(h.id)?.scrollIntoView({{behavior:'smooth',block:'start'}});
+    }});
+    currentChildren.appendChild(a);
+    // Auto-open parent when h3 added
+    currentChildren.classList.add('open');
+    if(currentSection) currentSection.classList.add('open');
+  }}
+}});
+
+// Scroll spy
+const allLinks = sidebar.querySelectorAll('[data-id]');
+const allHeadings = Array.from(document.querySelectorAll('#content h2,#content h3'));
+
+function updateActive(){{
+  const scrollY = window.scrollY + 80;
+  let active = null;
+  for(const h of allHeadings){{
+    if(h.offsetTop <= scrollY) active = h.id;
+    else break;
+  }}
+  allLinks.forEach(a => {{
+    const on = a.dataset.id === active;
+    a.classList.toggle('active', on);
+    // auto-open parent section if child is active
+    if(on && a.classList.contains('toc-h3')){{
+      const parent = a.closest('.toc-section');
+      if(parent){{
+        parent.querySelector('.toc-children')?.classList.add('open');
+        parent.querySelector('.toc-h2')?.classList.add('open');
+      }}
+    }}
+  }});
+}}
+
+window.addEventListener('scroll', updateActive, {{passive:true}});
+updateActive();
+
+// Open first section by default
+const firstSection = sidebar.querySelector('.toc-section');
+if(firstSection){{
+  firstSection.querySelector('.toc-children')?.classList.add('open');
+  firstSection.querySelector('.toc-h2')?.classList.add('open');
+}}
 </script>
 </body>
 </html>"""
