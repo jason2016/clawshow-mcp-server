@@ -921,6 +921,54 @@ async def api_order_confirm_payment(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# Daily Stock Management API
+# ---------------------------------------------------------------------------
+
+async def api_inventory_get(request: Request) -> JSONResponse:
+    """GET /api/inventory?namespace=&date=YYYY-MM-DD"""
+    from datetime import datetime, timezone
+    namespace = request.query_params.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    date_str = request.query_params.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    stock = db.get_daily_stock(namespace, date_str)
+    return JSONResponse({"stock": stock, "date": date_str})
+
+
+async def api_inventory_set(request: Request) -> JSONResponse:
+    """POST /api/inventory/set — batch upsert daily stock limits."""
+    from datetime import datetime, timezone
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    date_str = data.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    items = data.get("items", [])
+    if not items:
+        return JSONResponse({"error": "items required"}, status_code=400)
+    result = db.set_daily_stock(namespace, date_str, items)
+    return JSONResponse(result)
+
+
+async def api_inventory_restore_yesterday(request: Request) -> JSONResponse:
+    """POST /api/inventory/restore-yesterday — copy yesterday limits to today."""
+    from datetime import datetime, timezone
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    namespace = data.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace is required"}, status_code=400)
+    date_str = data.get("date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    result = db.restore_yesterday_stock(namespace, date_str)
+    return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
 # eSign V2 endpoints
 # ---------------------------------------------------------------------------
 
@@ -2829,6 +2877,9 @@ def _build_app() -> Starlette:
             Route("/api/order/history", api_order_history, methods=["GET"]),
             Route("/api/order/{id:int}/complete", api_order_complete, methods=["PATCH"]),
             Route("/api/order/{id:int}/confirm-payment", api_order_confirm_payment, methods=["POST"]),
+            Route("/api/inventory", api_inventory_get, methods=["GET"]),
+            Route("/api/inventory/set", api_inventory_set, methods=["POST"]),
+            Route("/api/inventory/restore-yesterday", api_inventory_restore_yesterday, methods=["POST"]),
             Route("/api/order/{id:int}/picked", api_order_picked, methods=["PATCH"]),
             Route("/api/order/{id:int}/mark-printed", api_order_mark_printed, methods=["PATCH"]),
             Route("/api/payment/create", api_payment_create, methods=["POST"]),

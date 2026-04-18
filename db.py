@@ -602,6 +602,7 @@ def create_dine_order(namespace: str, data: dict) -> dict:
     else:
         payment_status = "unpaid"
 
+    today = now[:10]
     with get_conn() as conn:
         order_number = _next_dine_order_number(conn, namespace)
         cur = conn.execute(
@@ -612,6 +613,8 @@ def create_dine_order(namespace: str, data: dict) -> dict:
              data.get("total_amount", 0), payment_status, payment_method, now, now),
         )
         order_id = cur.lastrowid
+        # Decrement daily stock for items that have limits set
+        _decrement_daily_stock_conn(conn, namespace, today, data.get("items", []), now)
 
     return {"success": True, "order_id": order_id, "order_number": order_number, "namespace": namespace}
 
@@ -644,6 +647,100 @@ def update_dine_order_status(namespace: str, order_id: int, status: str) -> dict
         if cur.rowcount == 0:
             return {"success": False, "error": f"Order {order_id} not found"}
     return {"success": True, "order_id": order_id, "status": status}
+
+
+# ── Daily Stock Management ────────────────────────────────────────────────────
+
+def _ensure_daily_stock_table(conn) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_stock (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            namespace TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            stock_limit INTEGER NOT NULL,
+            sold_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT,
+            UNIQUE(namespace, item_id, date)
+        )
+    """)
+
+
+def _decrement_daily_stock_conn(conn, namespace: str, date_str: str, items: list, now: str) -> None:
+    """Decrement sold_count for each ordered item (called inside an existing connection)."""
+    try:
+        _ensure_daily_stock_table(conn)
+        for item in items:
+            conn.execute(
+                """UPDATE daily_stock SET sold_count = MIN(sold_count + ?, stock_limit), updated_at = ?
+                   WHERE namespace=? AND item_id=? AND date=?""",
+                (item.get("qty", 1), now, namespace, item.get("id", ""), date_str),
+            )
+    except Exception:
+        pass  # stock decrement is best-effort, never block an order
+
+
+def get_daily_stock(namespace: str, date_str: str) -> dict:
+    """Return {item_id: {limit, sold_count, sold_out}} for the given date."""
+    with get_conn() as conn:
+        _ensure_daily_stock_table(conn)
+        rows = conn.execute(
+            "SELECT item_id, stock_limit, sold_count FROM daily_stock WHERE namespace=? AND date=?",
+            (namespace, date_str),
+        ).fetchall()
+    return {
+        row["item_id"]: {
+            "limit": row["stock_limit"],
+            "sold_count": row["sold_count"],
+            "sold_out": row["sold_count"] >= row["stock_limit"],
+        }
+        for row in rows
+    }
+
+
+def set_daily_stock(namespace: str, date_str: str, items: list) -> dict:
+    """Batch upsert stock limits. items = [{id, limit}]. limit=0 removes limit."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        _ensure_daily_stock_table(conn)
+        for item in items:
+            if item.get("limit", 0) == 0:
+                conn.execute(
+                    "DELETE FROM daily_stock WHERE namespace=? AND item_id=? AND date=?",
+                    (namespace, item["id"], date_str),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO daily_stock (namespace, item_id, date, stock_limit, sold_count, updated_at)
+                       VALUES (?, ?, ?, ?, 0, ?)
+                       ON CONFLICT(namespace, item_id, date) DO UPDATE SET
+                           stock_limit=excluded.stock_limit, updated_at=excluded.updated_at""",
+                    (namespace, item["id"], date_str, item["limit"], now),
+                )
+    return {"success": True, "count": len(items)}
+
+
+def restore_yesterday_stock(namespace: str, date_str: str) -> dict:
+    """Copy stock limits from yesterday to today (reset sold_count to 0)."""
+    yesterday = (datetime.strptime(date_str, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        _ensure_daily_stock_table(conn)
+        rows = conn.execute(
+            "SELECT item_id, stock_limit FROM daily_stock WHERE namespace=? AND date=?",
+            (namespace, yesterday),
+        ).fetchall()
+        if not rows:
+            return {"success": False, "error": "Aucune donnée de stock pour hier"}
+        for row in rows:
+            conn.execute(
+                """INSERT INTO daily_stock (namespace, item_id, date, stock_limit, sold_count, updated_at)
+                   VALUES (?, ?, ?, ?, 0, ?)
+                   ON CONFLICT(namespace, item_id, date) DO UPDATE SET
+                       stock_limit=excluded.stock_limit, sold_count=0, updated_at=excluded.updated_at""",
+                (namespace, row["item_id"], date_str, row["stock_limit"], now),
+            )
+    return {"success": True, "count": len(rows)}
 
 
 # Auto-init on import
