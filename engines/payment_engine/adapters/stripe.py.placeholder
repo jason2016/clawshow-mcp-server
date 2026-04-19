@@ -1,0 +1,3 @@
+# Stripe Gateway Adapter
+# STATUS: Placeholder - implement after MCP spec finalization (2026-04-21)
+# Billing success = charge.succeeded

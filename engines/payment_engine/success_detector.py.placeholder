@@ -1,0 +1,10 @@
+# Success Detector - Pricing v2.5 pay-for-outcome logic
+# STATUS: Placeholder
+#
+# Billing success = gateway returns "succeeded" status:
+#   - Stripe: charge.succeeded
+#   - Mollie: payment.paid
+#   - Stancer: status=paid
+#
+# If success → charge ClawShow commission
+# If failure → no commission (Pricing v2.5)

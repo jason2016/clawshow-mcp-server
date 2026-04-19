@@ -111,6 +111,49 @@ Call any tool without a namespace to use demo data:
 - `generate_payment(amount=10, currency="eur", provider="stancer", description="Demo", namespace="demo")` → real test payment link
 - `send_esign_request(template="enrollment_contract", signer_name="Demo User", signer_email="demo@test.com", fields={}, namespace="demo")` → signing page URL
 
+## Tool Inventory (2026-04-19)
+
+### Currently Live (11 Tools)
+- generate_business_page
+- generate_rental_website
+- generate_payment
+- verify_payment
+- send_notification
+- send_esign_request
+- generate_report
+- manage_inventory
+- manage_orders
+- manage_bookings
+- extract_finance_fields
+
+### P0 Development (Bootstrap Phase, 2026-04-19)
+- **Billing**: create_billing_plan, get_billing_status,
+  cancel_billing_plan
+  - Target: Production 2026-06-15
+  - See `tools/billing/`
+
+- **e-Invoice**: create_einvoice, receive_einvoices,
+  get_einvoice_status, switch_pdp, validate_einvoice
+  - Target: Production before 2026-09-01 (法国强制日)
+  - See `tools/einvoice/`
+
+### Engines
+- **6 Original**: Page, Payment, Notification,
+  eSign, Report, Business Operations
+- **7th (New)**: e-Invoice Engine
+  (added per decision #30 due to time window)
+
+### Architecture
+All Tools live in single clawshow-mcp-server.
+One MCP URL: mcp.clawshow.ai/sse
+Per decision: 决策 #2, #32 (unified architecture).
+
+## Related Documentation
+
+- Manifesto v1.1 (`../ClawShow-Workspace/documents/manifesto/`)
+- STRATEGY_DECISIONS v2.0
+- Pricing v2.5
+
 ## License
 
 MIT

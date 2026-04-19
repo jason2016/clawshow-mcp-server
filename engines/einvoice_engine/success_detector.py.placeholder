@@ -1,0 +1,9 @@
+# Success Detector - Pricing v2.5 pay-for-outcome logic for e-Invoice
+# STATUS: Placeholder
+#
+# e-Invoice success = PDP confirms receipt + deliverable status:
+#   - PDP returns receipt ID
+#   - Invoice status = "delivered"
+#
+# If success → charge €0.10/invoice
+# If failure (PDP rejection/timeout after 3 retries) → no charge
