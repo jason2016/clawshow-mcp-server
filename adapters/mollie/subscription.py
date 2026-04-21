@@ -37,8 +37,7 @@ def create_mollie_subscription(
     }
     if times is not None:
         params["times"] = times
-    if webhook_url:
-        params["webhookUrl"] = webhook_url
+    params["webhookUrl"] = webhook_url or "https://mcp.clawshow.ai/webhooks/mollie"
 
     customer = mollie.customers.get(customer_id)
     sub = customer.subscriptions.create(params)
