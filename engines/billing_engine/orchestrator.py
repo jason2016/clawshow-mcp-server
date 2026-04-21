@@ -114,13 +114,8 @@ class BillingOrchestrator:
                 )
                 gateway_plan_id = sub["subscription_id"]
             except Exception as exc:
-                if mode == "test":
-                    # TEST mode: Mollie profile may lack recurring methods. Simulate subscription ID.
-                    logger.warning("TEST mode subscription bypass (Mollie profile config): %s", exc)
-                    gateway_plan_id = f"sub_test_{uuid.uuid4().hex[:8]}"
-                else:
-                    logger.error("Mollie create_subscription failed: %s", exc)
-                    return {"success": False, "error": f"Gateway error creating subscription: {exc}"}
+                logger.error("Mollie create_subscription failed: %s", exc)
+                return {"success": False, "error": f"Gateway error creating subscription: {exc}"}
 
         # --- Override status if contract required ----------------------------
         if contract_required and contract_pdf_url:
