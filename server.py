@@ -168,23 +168,26 @@ PAYMENTS_DIR = Path(__file__).parent / "data" / "payments"
 async def mollie_webhook(request: Request) -> JSONResponse:
     """
     POST /webhooks/mollie
-    Mollie POSTs {"id": "tr_xxx"} when a payment status changes.
-    We fetch the payment, update installment status in billing.db.
+    Mollie POSTs {"id": "tr_xxx"} (form or JSON) when a payment status changes.
     """
+    payment_id = ""
     try:
-        body = await request.form()
-        payment_id = body.get("id") or ""
-        if not payment_id:
-            data = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        ct = request.headers.get("content-type", "")
+        if "application/json" in ct:
+            data = await request.json()
             payment_id = data.get("id", "")
+        else:
+            body = await request.form()
+            payment_id = body.get("id", "")
     except Exception:
-        payment_id = ""
+        pass
 
     if not payment_id:
         return JSONResponse({"error": "missing payment id"}, status_code=400)
 
     from adapters.mollie.webhook_handler import handle_mollie_webhook
-    result = handle_mollie_webhook(payment_id)
+    result = await handle_mollie_webhook(payment_id)
+    # Mollie expects 2xx; always return 200 to avoid Mollie retrying
     return JSONResponse({"ok": True, "result": result})
 
 
@@ -3004,5 +3007,7 @@ if __name__ == "__main__":
     else:
         print(f"ClawShow MCP Server starting — http://{_host}:{_port}/sse")
         print(f"Stats endpoint           — http://{_host}:{_port}/stats")
+        from engines.billing_engine.scheduler import start_scheduler
+        start_scheduler()
         app = _build_app()
         uvicorn.run(app, host=_host, port=_port)

@@ -67,3 +67,34 @@ def cancel_mollie_subscription(customer_id: str, subscription_id: str, mode: str
     customer = mollie.customers.get(customer_id)
     customer.subscriptions.delete(subscription_id)
     return {"subscription_id": subscription_id, "status": "canceled"}
+
+
+async def retry_failed_payment(
+    customer_id: str,
+    subscription_id: str,
+    amount: float,
+    currency: str,
+    description: str,
+    namespace: str,
+    installment_id: int,
+    mode: str = "test",
+) -> Dict:
+    """
+    Retry a failed subscription payment by creating a new recurring payment.
+    Returns {"payment_id", "status"}.
+    """
+    mollie = _get_client(mode)
+    customer = mollie.customers.get(customer_id)
+    payment = customer.payments.create({
+        "amount": {"currency": currency.upper(), "value": f"{amount:.2f}"},
+        "description": description,
+        "sequenceType": "recurring",
+        "subscriptionId": subscription_id,
+        "webhookUrl": "https://mcp.clawshow.ai/webhooks/mollie",
+        "metadata": {
+            "namespace": namespace,
+            "installment_id": installment_id,
+            "is_retry": True,
+        },
+    })
+    return {"payment_id": payment.id, "status": payment.status}

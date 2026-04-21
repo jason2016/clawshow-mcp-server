@@ -39,6 +39,10 @@ def get_conn():
 
 class BillingDB:
 
+    def get_conn_ctx(self):
+        """Expose get_conn for use in adapter helpers."""
+        return get_conn()
+
     def init_tables(self) -> None:
         sql = SCHEMA_PATH.read_text()
         with get_conn() as conn:
@@ -125,6 +129,64 @@ class BillingDB:
                 (plan_id,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_installment(self, installment_id: int) -> dict | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM billing_installments WHERE id = ?", (installment_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_installment_by_gateway_payment(self, gateway_payment_id: str) -> dict | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM billing_installments WHERE gateway_payment_id = ?",
+                (gateway_payment_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def count_charged_installments(self, plan_id: str) -> int:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM billing_installments WHERE plan_id = ? AND status = 'charged'",
+                (plan_id,),
+            ).fetchone()
+        return row[0] if row else 0
+
+    def generate_next_preview_installment(self, plan_id: str) -> None:
+        """For infinite subscriptions: after a charge, append next preview row."""
+        with get_conn() as conn:
+            last = conn.execute(
+                """SELECT installment_number, scheduled_date, amount
+                   FROM billing_installments WHERE plan_id = ?
+                   ORDER BY installment_number DESC LIMIT 1""",
+                (plan_id,),
+            ).fetchone()
+            if not last:
+                return
+            from dateutil.relativedelta import relativedelta
+            import datetime as dt
+            plan_row = conn.execute(
+                "SELECT frequency FROM billing_plans WHERE plan_id = ?", (plan_id,)
+            ).fetchone()
+            if not plan_row:
+                return
+            freq = plan_row["frequency"]
+            last_date = dt.date.fromisoformat(last["scheduled_date"])
+            if freq == "monthly":
+                next_date = last_date + relativedelta(months=1)
+            elif freq == "quarterly":
+                next_date = last_date + relativedelta(months=3)
+            elif freq == "weekly":
+                next_date = last_date + dt.timedelta(weeks=1)
+            else:
+                return
+            conn.execute(
+                """INSERT INTO billing_installments
+                   (plan_id, installment_number, amount, scheduled_date, status)
+                   VALUES (?, ?, ?, ?, 'scheduled')""",
+                (plan_id, last["installment_number"] + 1, last["amount"], next_date.isoformat()),
+            )
 
     def update_installment(self, installment_id: int, **fields: Any) -> None:
         sets = ", ".join(f"{k} = :{k}" for k in fields)
