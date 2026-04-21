@@ -319,15 +319,15 @@ class BillingOrchestrator:
         self.db.update_plan_status(plan_id, self.namespace, "cancelled")
 
         if plan.get("external_webhook_url"):
-            from core.webhook_sender import send_webhook
-            send_webhook(
+            from engines.billing_engine.webhook_sender import send_external_webhook_sync
+            send_external_webhook_sync(
                 webhook_url=plan["external_webhook_url"],
-                event="plan_cancelled",
+                auth_token=plan.get("external_auth_token") or "",
+                event_type="plan_cancelled",
                 plan_id=plan_id,
+                order_id=plan.get("external_order_id") or "",
                 namespace=self.namespace,
-                data={"reason": reason or "api_request"},
-                auth_token=plan.get("external_auth_token"),
-                external_order_id=plan.get("external_order_id"),
+                payload={"reason": reason or "api_request"},
             )
 
         return {"success": True, "plan_id": plan_id, "status": "cancelled"}
