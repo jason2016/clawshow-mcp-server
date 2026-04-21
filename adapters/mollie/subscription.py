@@ -36,7 +36,8 @@ def create_mollie_subscription(
     if webhook_url:
         params["webhookUrl"] = webhook_url
 
-    sub = mollie.customer_subscriptions.with_parent_id(customer_id).create(params)
+    customer = mollie.customers.get(customer_id)
+    sub = customer.subscriptions.create(params)
     return {
         "subscription_id": sub.id,
         "status": sub.status,
@@ -47,7 +48,8 @@ def create_mollie_subscription(
 
 def get_mollie_subscription(customer_id: str, subscription_id: str, mode: str = "test") -> Dict:
     mollie = _get_client(mode)
-    sub = mollie.customer_subscriptions.with_parent_id(customer_id).get(subscription_id)
+    customer = mollie.customers.get(customer_id)
+    sub = customer.subscriptions.get(subscription_id)
     return {
         "subscription_id": sub.id,
         "status": sub.status,
@@ -59,5 +61,6 @@ def get_mollie_subscription(customer_id: str, subscription_id: str, mode: str = 
 
 def cancel_mollie_subscription(customer_id: str, subscription_id: str, mode: str = "test") -> Dict:
     mollie = _get_client(mode)
-    mollie.customer_subscriptions.with_parent_id(customer_id).delete(subscription_id)
+    customer = mollie.customers.get(customer_id)
+    customer.subscriptions.delete(subscription_id)
     return {"subscription_id": subscription_id, "status": "canceled"}
