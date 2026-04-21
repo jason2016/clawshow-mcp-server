@@ -8,3 +8,8 @@ resend>=2.0.0
 reportlab>=4.0.0
 pypdf>=4.0.0
 requests>=2.31.0
+
+# Billing MVP (Week 1, 2026-04-21)
+mollie-api-python>=3.0.0
+apscheduler>=3.10.0
+python-dateutil>=2.8.0

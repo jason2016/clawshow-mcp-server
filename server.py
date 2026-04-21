@@ -112,6 +112,7 @@ from tools.report import register as _register_report
 from tools.bookings import register as _register_bookings
 from tools.payment import register as _register_payment
 from tools.esign import register as _register_esign
+from tools.billing import register as _register_billing
 
 _register_rental_website(mcp, _record_call)
 _register_finance_extract(mcp, _record_call)
@@ -123,6 +124,7 @@ _register_report(mcp, _record_call)
 _register_bookings(mcp, _record_call)
 _register_payment(mcp, _record_call)
 _register_esign(mcp, _record_call)
+_register_billing(mcp, _record_call)
 
 # ---------------------------------------------------------------------------
 # /stats endpoint
