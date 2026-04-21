@@ -20,9 +20,11 @@ def create_mollie_subscription(
     description: str,
     mode: str = "test",
     webhook_url: str = "",
+    times: int | None = None,
 ) -> Dict:
     """
     Create a recurring subscription for a Mollie customer.
+    times=None means infinite. times=N means fixed number of charges.
     Returns {"subscription_id", "status", "mode"}.
     """
     mollie = _get_client(mode)
@@ -33,6 +35,8 @@ def create_mollie_subscription(
         "startDate": start_date,
         "description": description,
     }
+    if times is not None:
+        params["times"] = times
     if webhook_url:
         params["webhookUrl"] = webhook_url
 

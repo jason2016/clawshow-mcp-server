@@ -111,6 +111,7 @@ class BillingOrchestrator:
                     start_date=start_date,
                     description=description or f"ClawShow {self.namespace}",
                     mode=mode,
+                    times=None if installments == -1 else installments,
                 )
                 gateway_plan_id = sub["subscription_id"]
             except Exception as exc:
@@ -187,7 +188,7 @@ class BillingOrchestrator:
             "gateway_mode": mode,
             "status": initial_status,
             "schedule": schedule[:3],  # first 3 installments in response
-            "total_installments": len(schedule),
+            "total_installments": installments if installments == -1 else len(schedule),
             "per_installment_amount": per_installment,
             "currency": currency,
             "contract_signing": {"status": "pending_signature"} if initial_status == "pending_signature" else None,
