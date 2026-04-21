@@ -3040,7 +3040,8 @@ if __name__ == "__main__":
     else:
         print(f"ClawShow MCP Server starting — http://{_host}:{_port}/sse")
         print(f"Stats endpoint           — http://{_host}:{_port}/stats")
-        from engines.billing_engine.scheduler import start_scheduler
+        from engines.billing_engine.scheduler import start_scheduler, start_unsigned_contract_cleanup
         start_scheduler()
+        start_unsigned_contract_cleanup()
         app = _build_app()
         uvicorn.run(app, host=_host, port=_port)

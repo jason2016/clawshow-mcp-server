@@ -62,7 +62,63 @@ def cancel_installment_retry(installment_id: int) -> None:
         pass
 
 
+def start_unsigned_contract_cleanup() -> None:
+    """
+    Schedule a daily job to auto-cancel plans stuck in pending_signature for 30+ days.
+    Runs at 02:00 UTC every day.
+    """
+    from apscheduler.triggers.cron import CronTrigger
+    s = get_scheduler()
+    job_id = "cleanup_unsigned_contracts"
+    # Remove if already exists (prevents duplicate on restart)
+    try:
+        s.remove_job(job_id)
+    except Exception:
+        pass
+    s.add_job(
+        func=_run_unsigned_contract_cleanup,
+        trigger=CronTrigger(hour=2, minute=0),
+        id=job_id,
+        replace_existing=True,
+    )
+    logger.info("Unsigned contract cleanup scheduled (daily at 02:00 UTC)")
+
+
 def _run_installment_retry(installment_id: int, namespace: str) -> None:
     """Executed by BackgroundScheduler (thread context) at retry time."""
     from engines.billing_engine.retry_manager import execute_retry
     asyncio.run(execute_retry(installment_id=installment_id, namespace=namespace))
+
+
+def _run_unsigned_contract_cleanup() -> None:
+    """
+    Cancel plans stuck in pending_signature for > 30 days.
+    Runs daily. Logs but never raises.
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        from storage.billing_db import get_conn
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        cancelled = []
+        with get_conn() as conn:
+            rows = conn.execute(
+                """SELECT plan_id, namespace FROM billing_plans
+                   WHERE status = 'pending_signature'
+                   AND created_at < ?""",
+                (cutoff,),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    "UPDATE billing_plans SET status='cancelled', updated_at=? WHERE plan_id=? AND namespace=?",
+                    (datetime.now(timezone.utc).isoformat(), row["plan_id"], row["namespace"]),
+                )
+                conn.execute(
+                    "UPDATE billing_installments SET status='cancelled' WHERE plan_id=? AND status='scheduled'",
+                    (row["plan_id"],),
+                )
+                cancelled.append(row["plan_id"])
+        if cancelled:
+            logger.info("Unsigned contract cleanup: cancelled %d plans: %s", len(cancelled), cancelled)
+    except Exception as exc:
+        logger.error("Unsigned contract cleanup error: %s", exc)

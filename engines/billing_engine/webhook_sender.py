@@ -105,3 +105,58 @@ async def send_external_webhook(
             await asyncio.sleep(RETRY_DELAYS[attempt])
 
     return False
+
+
+def send_external_webhook_sync(
+    webhook_url: str,
+    auth_token: str,
+    event_type: str,
+    plan_id: str,
+    order_id: str,
+    namespace: str,
+    payload: Dict,
+) -> bool:
+    """
+    Synchronous version for use from non-async contexts (e.g. orchestrator.create_plan).
+    Single attempt, no retry (fire-and-forget quality).
+    """
+    import requests
+
+    full_payload = {
+        "clawshow_version": "1.0",
+        "event": event_type,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "plan_id": plan_id,
+        "order_id": order_id,
+        "namespace": namespace,
+        "data": payload,
+    }
+    headers = {"Content-Type": "application/json", "User-Agent": "ClawShow-Webhook/1.0"}
+    if auth_token:
+        headers["Authorization"] = f"Bearer {auth_token}"
+
+    db = BillingDB()
+    db.init_tables()
+    body = json.dumps(full_payload)
+    http_status = None
+    response_body = ""
+    succeeded = False
+    try:
+        resp = requests.post(webhook_url, data=body, headers=headers, timeout=10)
+        http_status = resp.status_code
+        response_body = resp.text[:1000]
+        succeeded = 200 <= resp.status_code < 300
+    except Exception as exc:
+        response_body = f"Exception: {exc}"
+        logger.warning("Sync outbound webhook failed: %s", exc)
+
+    db.log_webhook({
+        "plan_id": plan_id,
+        "event_type": event_type,
+        "webhook_url": webhook_url,
+        "payload": body,
+        "http_status": http_status,
+        "response_body": response_body,
+        "succeeded": succeeded,
+    })
+    return succeeded

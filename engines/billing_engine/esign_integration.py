@@ -103,15 +103,12 @@ async def handle_esign_callback(payload: dict) -> Dict:
 
 async def _activate_plan_after_signature(plan_id: str, namespace: str) -> Dict:
     """
-    Contract signed → activate the plan.
-    For plans with gateway_plan_id already set: just flip status to active.
-    For one_time plans: status → pending_charge.
+    Contract signed → create gateway subscription (if deferred) → activate plan.
     """
     from storage.billing_db import BillingDB
 
     db = BillingDB()
 
-    # Find plan across all namespaces if namespace is empty
     if namespace:
         plan = db.get_plan(plan_id, namespace)
     else:
@@ -127,15 +124,23 @@ async def _activate_plan_after_signature(plan_id: str, namespace: str) -> Dict:
         logger.info("esign activate: plan %s is already %s, skipping", plan_id, plan["status"])
         return {"ok": True, "action": "already_processed", "status": plan["status"]}
 
+    gateway_plan_id = plan.get("gateway_plan_id")
+
     if plan["frequency"] == "one_time":
         new_status = "pending_charge"
     else:
+        # Create the deferred subscription now
+        if not gateway_plan_id:
+            gateway_plan_id = await _create_deferred_subscription(plan, db)
         new_status = "active"
 
-    db.update_plan_status(plan_id, ns, new_status)
-    logger.info("esign: plan %s activated → %s", plan_id, new_status)
+    update_kwargs = {}
+    if gateway_plan_id and gateway_plan_id != plan.get("gateway_plan_id"):
+        update_kwargs["gateway_plan_id"] = gateway_plan_id
 
-    # Fire external webhook if configured
+    db.update_plan_status(plan_id, ns, new_status, **update_kwargs)
+    logger.info("esign: plan %s activated → %s (sub=%s)", plan_id, new_status, gateway_plan_id)
+
     if plan.get("external_webhook_url"):
         from engines.billing_engine.webhook_sender import send_external_webhook
         import asyncio
@@ -146,10 +151,65 @@ async def _activate_plan_after_signature(plan_id: str, namespace: str) -> Dict:
             plan_id=plan_id,
             order_id=plan.get("external_order_id") or "",
             namespace=ns,
-            payload={"status": new_status, "trigger": "contract_signed"},
+            payload={"status": new_status, "trigger": "contract_signed", "gateway_plan_id": gateway_plan_id},
         ))
 
-    return {"ok": True, "action": "activated", "plan_id": plan_id, "new_status": new_status}
+    return {
+        "ok": True,
+        "action": "activated",
+        "plan_id": plan_id,
+        "new_status": new_status,
+        "gateway_plan_id": gateway_plan_id,
+    }
+
+
+async def _create_deferred_subscription(plan: dict, db) -> str | None:
+    """Create the gateway subscription that was deferred pending contract signature."""
+    from engines.billing_engine.schedule_calculator import installment_amount
+
+    gateway = plan.get("gateway", "mollie")
+    mode = plan.get("gateway_mode", "test")
+    customer_id = plan.get("gateway_customer_id", "")
+    amount = installment_amount(plan["total_amount"], plan["installments"])
+    installments = plan["installments"]
+
+    if not customer_id:
+        logger.warning("deferred sub: no gateway_customer_id for plan %s", plan["plan_id"])
+        return None
+
+    try:
+        if gateway == "mollie":
+            from adapters.mollie.subscription import create_mollie_subscription
+            from engines.billing_engine.orchestrator import _mollie_interval
+            sub = create_mollie_subscription(
+                customer_id=customer_id,
+                amount=amount,
+                currency=plan["currency"],
+                interval=_mollie_interval(plan["frequency"]),
+                start_date=plan["start_date"],
+                description=plan.get("description") or f"ClawShow {plan['namespace']}",
+                mode=mode,
+                times=None if installments == -1 else installments,
+            )
+            return sub["subscription_id"]
+        elif gateway == "stripe":
+            from adapters.stripe.subscription import create_stripe_subscription
+            sub = create_stripe_subscription(
+                customer_id=customer_id,
+                amount=amount,
+                currency=plan["currency"],
+                frequency=plan["frequency"],
+                start_date=plan["start_date"],
+                description=plan.get("description") or f"ClawShow {plan['namespace']}",
+                namespace=plan["namespace"],
+                plan_id=plan["plan_id"],
+                installments=installments,
+                mode=mode,
+            )
+            return sub["subscription_id"]
+    except Exception as exc:
+        logger.error("deferred subscription creation failed: %s", exc)
+        return None
 
 
 async def _cancel_plan_after_failed_signature(plan_id: str, namespace: str, reason: str = "declined") -> Dict:

@@ -22,9 +22,9 @@ from adapters.mollie.subscription import create_mollie_subscription
 logger = logging.getLogger(__name__)
 
 
-def get_gateway_mode(namespace: str) -> str:
-    """Phase 1 MVP: test mode for all namespaces."""
-    return "test"
+def get_gateway_mode(namespace: str, gateway: str = "mollie") -> str:
+    from core.config import get_gateway_mode as _cfg_mode
+    return _cfg_mode(namespace, gateway)
 
 
 class BillingOrchestrator:
@@ -92,15 +92,20 @@ class BillingOrchestrator:
                 except Exception as exc:
                     logger.warning("Test mandate creation failed (non-fatal): %s", exc)
 
-        # --- Mollie: create subscription / one-time ---------------------------
+        # --- Create subscription (skip if contract must be signed first) -------
         per_installment = installment_amount(total_amount, installments)
 
         gateway_plan_id = None
         initial_status = "active"
 
+        # When contract is required, defer subscription creation until after signature
+        skip_subscription = contract_required and bool(contract_pdf_url)
+
         if frequency == "one_time":
-            # One-time: no subscription, just record plan
             initial_status = "pending_charge"
+        elif skip_subscription:
+            # Plan stays pending_signature; subscription created in esign_integration._activate_plan
+            initial_status = "pending_signature"
         elif gateway == "stripe":
             try:
                 from adapters.stripe.customer import create_stripe_customer
@@ -146,10 +151,6 @@ class BillingOrchestrator:
                 logger.error("Mollie create_subscription failed: %s", exc)
                 return {"success": False, "error": f"Gateway error creating subscription: {exc}"}
 
-        # --- Override status if contract required ----------------------------
-        if contract_required and contract_pdf_url:
-            initial_status = "pending_signature"
-
         # --- Schedule preview ------------------------------------------------
         start = date.fromisoformat(start_date)
         schedule = calculate_schedule(start, installments, frequency, per_installment)
@@ -193,36 +194,64 @@ class BillingOrchestrator:
         ]
         self.db.create_installments(installment_rows)
 
-        # --- External webhook ------------------------------------------------
-        if external_webhook_url:
-            from core.webhook_sender import send_webhook
-            send_webhook(
-                webhook_url=external_webhook_url,
-                event="plan_created",
+        # --- Auto-trigger eSign if contract required --------------------------
+        esign_request_id = None
+        signing_url = None
+        if skip_subscription:
+            esign_result = _send_esign_sync(
                 plan_id=plan_id,
                 namespace=self.namespace,
-                data={"status": initial_status, "total_amount": total_amount, "installments": installments},
-                auth_token=external_auth_token,
-                external_order_id=external_order_id,
+                contract_pdf_url=contract_pdf_url,
+                signers=signers,
+                customer_email=customer_email,
+                customer_name=customer_name,
+                description=description or f"Contract for plan {plan_id}",
+            )
+            if esign_result.get("ok"):
+                esign_request_id = esign_result.get("esign_request_id")
+                signing_url = esign_result.get("signing_url")
+                if esign_request_id:
+                    self.db.update_plan_status(plan_id, self.namespace, "pending_signature",
+                                               contract_esign_request_id=esign_request_id)
+            else:
+                logger.warning("eSign trigger failed (non-fatal): %s", esign_result.get("error"))
+
+        # --- External webhook ------------------------------------------------
+        if external_webhook_url:
+            from engines.billing_engine.webhook_sender import send_external_webhook_sync
+            send_external_webhook_sync(
+                webhook_url=external_webhook_url,
+                auth_token=external_auth_token or "",
+                event_type="plan_created",
+                plan_id=plan_id,
+                order_id=external_order_id or "",
+                namespace=self.namespace,
+                payload={"status": initial_status, "total_amount": total_amount, "installments": installments},
             )
 
         commission_preview = round(total_amount * 0.005, 2)
 
-        return {
+        result = {
             "success": True,
             "plan_id": plan_id,
             "gateway_plan_id": gateway_plan_id,
             "gateway_customer_id": gateway_customer_id,
             "gateway_mode": mode,
             "status": initial_status,
-            "schedule": schedule[:3],  # first 3 installments in response
+            "schedule": schedule[:3],
             "total_installments": installments if installments == -1 else len(schedule),
             "per_installment_amount": per_installment,
             "currency": currency,
-            "contract_signing": {"status": "pending_signature"} if initial_status == "pending_signature" else None,
             "next_action": "wait_for_signature" if initial_status == "pending_signature" else "active",
             "commission_preview": commission_preview,
         }
+        if initial_status == "pending_signature":
+            result["contract_signing"] = {
+                "status": "pending_signature",
+                "esign_request_id": esign_request_id,
+                "signing_url": signing_url,
+            }
+        return result
 
     def get_status(self, plan_id: str) -> dict:
         plan = self.db.get_plan(plan_id, self.namespace)
@@ -311,6 +340,50 @@ class BillingOrchestrator:
         new_status = "pending_charge" if plan["frequency"] == "one_time" else "active"
         self.db.update_plan_status(plan_id, self.namespace, new_status)
         return {"success": True, "plan_id": plan_id, "new_status": new_status}
+
+
+def _send_esign_sync(
+    plan_id: str,
+    namespace: str,
+    contract_pdf_url: str,
+    signers: list,
+    customer_email: str,
+    customer_name: str,
+    description: str = "",
+) -> dict:
+    """
+    Synchronous HTTP call to /esign/create.
+    Used from create_plan (sync context).
+    Falls back gracefully on error.
+    """
+    import os
+    import requests
+
+    base_url = os.environ.get("MCP_BASE_URL", "https://mcp.clawshow.ai")
+
+    signer_list = signers if signers else [{"name": customer_name, "email": customer_email, "role": "signer"}]
+
+    payload = {
+        "namespace": namespace,
+        "document_url": contract_pdf_url,
+        "signers": signer_list,
+        "description": description,
+        "callback_metadata": {"plan_id": plan_id, "namespace": namespace},
+        "webhook_url": f"{base_url}/webhooks/esign",
+    }
+    try:
+        resp = requests.post(f"{base_url}/esign/create", json=payload, timeout=15)
+        if resp.status_code != 200:
+            return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        data = resp.json()
+        esign_id = data.get("document_id") or data.get("id") or data.get("esign_request_id")
+        return {
+            "ok": bool(esign_id),
+            "esign_request_id": esign_id,
+            "signing_url": data.get("signing_url", ""),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def _mollie_interval(frequency: str) -> str:

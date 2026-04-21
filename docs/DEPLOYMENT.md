@@ -1,6 +1,8 @@
-# Deployment
+# ClawShow Deployment Guide
 
-## Server
+**Updated: 2026-04-21 (Billing MVP Week 4)**
+
+## Server: stand9 (OVH France)
 
 | Item | Value |
 |------|-------|
@@ -10,46 +12,110 @@
 | Provider | OVH (Strasbourg) |
 | SSH | `ssh root@51.77.201.82` |
 | Code path | `/opt/clawshow-mcp-server` |
-| Python | 3.12 (venv at `/opt/clawshow-mcp-server/venv`) |
-| Domain | mcp.clawshow.ai → Nginx reverse proxy → localhost:8000 |
+| Python | 3.12 (`.venv` — PEP 668 compliant) |
+| Domain | `mcp.clawshow.ai` → Nginx → localhost:8000 |
+| eSign domain | `esign-api.clawshow.ai` → same backend |
 
-## Standard Deploy
-
-```bash
-ssh root@51.77.201.82 "cd /opt/clawshow-mcp-server && git pull origin main && systemctl restart clawshow-mcp"
-```
-
-If new pip dependencies were added:
+## Service Management
 
 ```bash
-ssh root@51.77.201.82 "cd /opt/clawshow-mcp-server && git pull origin main && source venv/bin/activate && pip install -r requirements.txt && systemctl restart clawshow-mcp"
+systemctl start clawshow-mcp
+systemctl stop clawshow-mcp
+systemctl restart clawshow-mcp
+systemctl status clawshow-mcp --no-pager
+journalctl -u clawshow-mcp -f --no-pager        # live logs
+journalctl -u clawshow-mcp --since "10 min ago" --no-pager  # recent
 ```
 
-## Verify
+## Standard Deploy (most common)
 
 ```bash
-# Service status
-ssh root@51.77.201.82 "systemctl status clawshow-mcp --no-pager | head -8"
-
-# Recent logs
-ssh root@51.77.201.82 "journalctl -u clawshow-mcp --since '5 minutes ago' --no-pager | tail -20"
-
-# Stats endpoint
-curl https://mcp.clawshow.ai/stats
+ssh root@51.77.201.82 "cd /opt/clawshow-mcp-server && git pull origin main && systemctl restart clawshow-mcp && sleep 3 && systemctl status clawshow-mcp --no-pager | head -8"
 ```
 
-## Environment Variables (.env)
+## Deploy with New Dependencies
 
-Located at `/opt/clawshow-mcp-server/.env` (never committed to git):
-
-```
-GITHUB_TOKEN=ghp_xxx          # GitHub PAT — repo + pages scopes
-STRIPE_SECRET_KEY=sk_test_xxx  # Stripe secret key
-STRIPE_WEBHOOK_SECRET=whsec_xxx # Stripe webhook signing secret
-RESEND_API_KEY=re_xxx          # Resend email API key
+```bash
+ssh root@51.77.201.82 "cd /opt/clawshow-mcp-server && git pull origin main && .venv/bin/pip install -r requirements.txt && systemctl restart clawshow-mcp"
 ```
 
-See `.env.example` in repo for template.
+## Virtual Environment
+
+Ubuntu 24.04 enforces PEP 668 — system Python is protected.
+Always use `.venv`:
+
+```bash
+cd /opt/clawshow-mcp-server
+.venv/bin/python --version           # should be 3.12.x
+.venv/bin/pip list | grep mollie     # check a package
+.venv/bin/python server.py           # manual start (for debug)
+```
+
+## Environment Variables
+
+File: `/opt/clawshow-mcp-server/.env` (never committed to git)
+
+```
+# General
+MCP_BASE_URL=https://mcp.clawshow.ai
+GITHUB_TOKEN=ghp_xxx
+RESEND_API_KEY=re_xxx
+AWS_ACCESS_KEY_ID=xxx
+AWS_SECRET_ACCESS_KEY=xxx
+S3_BUCKET_CLAWSHOW=xxx
+
+# Billing — Mollie
+MOLLIE_API_KEY_TEST=test_xxx
+MOLLIE_API_KEY_LIVE=live_xxx       # after Mollie LIVE approval
+
+# Billing — Stripe IESIG
+STRIPE_API_KEY_IESIG_TEST=sk_test_xxx
+STRIPE_WEBHOOK_SECRET_IESIG_TEST=whsec_xxx
+STRIPE_API_KEY_IESIG_LIVE=sk_live_xxx    # Phase 2
+STRIPE_WEBHOOK_SECRET_IESIG_LIVE=...     # Phase 2
+
+# Billing — gateway mode overrides (optional)
+# CLAWSHOW_ILCI_WILLIAM_MOLLIE_MODE=live  # enable live per namespace
+```
+
+## Database
+
+SQLite at `/opt/clawshow-mcp-server/data/billing.db`.
+
+```bash
+# Quick check
+ssh root@51.77.201.82 "sqlite3 /opt/clawshow-mcp-server/data/billing.db 'SELECT count(*), status FROM billing_plans GROUP BY status;'"
+
+# eSign DB
+sqlite3 /opt/clawshow-mcp-server/data/esign.db '.tables'
+```
+
+Backup: currently manual. Phase 2: daily S3 backup.
+
+## Nginx
+
+Config: `/etc/nginx/sites-enabled/mcp.clawshow.ai`
+
+Reverse proxy `mcp.clawshow.ai` → `localhost:8000`. SSL via Let's Encrypt.
+
+Key routes:
+- `/sse` → MCP SSE stream
+- `/stats` → JSON tool call counts
+- `/webhooks/mollie` → Mollie billing webhook
+- `/webhooks/stripe` → Stripe billing webhook (Week 3+)
+- `/webhooks/esign` → eSign callback (Week 3+)
+- `/webhook/stripe` → legacy Stripe checkout webhook
+- `/esign/*` → eSign signing pages
+- `/reports/` → PDF files
+
+## SSL Certificate
+
+```bash
+certbot renew --dry-run    # test
+certbot renew              # actual renewal
+```
+
+Auto-renew via cron. Check: `certbot certificates`.
 
 ## systemd Service
 
@@ -63,52 +129,35 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/clawshow-mcp-server
-ExecStart=/opt/clawshow-mcp-server/venv/bin/python server.py
+ExecStart=/opt/clawshow-mcp-server/.venv/bin/python server.py
 Restart=on-failure
 RestartSec=5
-Environment=PATH=/opt/clawshow-mcp-server/venv/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=/opt/clawshow-mcp-server/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Commands:
+## Verify
+
 ```bash
-systemctl start clawshow-mcp
-systemctl stop clawshow-mcp
-systemctl restart clawshow-mcp
-systemctl status clawshow-mcp
-journalctl -u clawshow-mcp -f    # live logs
-```
+# Service running
+ssh root@51.77.201.82 "systemctl status clawshow-mcp --no-pager | head -8"
 
-## Nginx
+# Stats
+curl https://mcp.clawshow.ai/stats
 
-Config: `/etc/nginx/sites-enabled/mcp.clawshow.ai`
-
-Reverse proxy `mcp.clawshow.ai` → `localhost:8000`. SSL via Let's Encrypt.
-
-Key routes:
-- `/sse` → MCP SSE stream
-- `/messages/` → MCP message endpoint
-- `/stats` → JSON stats
-- `/webhook/stripe` → Stripe webhook
-- `/reports/` → PDF files
-
-## SSL Certificate
-
-Let's Encrypt via certbot, auto-renew:
-```bash
-certbot renew --dry-run    # test
-certbot renew              # actual
+# Webhook endpoints
+curl -X POST https://mcp.clawshow.ai/webhooks/mollie -d '{"id":"test"}' -H 'Content-Type: application/json'
 ```
 
 ## Rollback
 
 ```bash
-# Find previous commit
-ssh root@51.77.201.82 "cd /opt/clawshow-mcp-server && git log --oneline -5"
+# Find previous stable commit
+ssh root@51.77.201.82 "cd /opt/clawshow-mcp-server && git log --oneline -10"
 
-# Rollback to specific commit
+# Rollback
 ssh root@51.77.201.82 "cd /opt/clawshow-mcp-server && git checkout <commit-hash> && systemctl restart clawshow-mcp"
 
 # Return to latest

@@ -92,6 +92,10 @@ async def _handle_invoice_paid(invoice: dict) -> Dict:
     installments = db.get_installments(plan_id)
     target = next((i for i in installments if i["status"] == "scheduled"), None)
     if target:
+        # Idempotency: skip if already charged
+        if target.get("status") == "charged" and target.get("gateway_payment_id") == payment_id:
+            logger.info("Duplicate Stripe paid event for %s — skipping", payment_id)
+            return {"ok": True, "action": "duplicate_skipped", "plan_id": plan_id}
         db.update_installment(
             target["id"],
             status="charged",

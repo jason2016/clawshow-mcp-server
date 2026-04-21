@@ -73,6 +73,11 @@ async def handle_mollie_webhook(payment_id: str) -> Dict:
 async def _handle_paid(db: BillingDB, plan: dict, installment: dict | None, payment_id: str, namespace: str) -> Dict:
     now = _now()
 
+    # Idempotency: if already charged with this payment_id, skip
+    if installment and installment.get("status") == "charged" and installment.get("gateway_payment_id") == payment_id:
+        logger.info("Duplicate paid webhook for %s — skipping", payment_id)
+        return {"success": True, "action_taken": "duplicate_skipped", "payment_id": payment_id}
+
     if installment:
         db.update_installment(installment["id"],
                               status="charged",
