@@ -197,6 +197,31 @@ class BillingDB:
                 fields,
             )
 
+    def cancel_pending_installments(self, plan_id: str) -> None:
+        with get_conn() as conn:
+            conn.execute(
+                "UPDATE billing_installments SET status = 'cancelled' WHERE plan_id = ? AND status = 'scheduled'",
+                (plan_id,),
+            )
+
+    def find_plan_by_id_any_namespace(self, plan_id: str) -> dict | None:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM billing_plans WHERE plan_id = ?", (plan_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_plan(self, plan_id: str, namespace: str, **fields: Any) -> None:
+        sets = ", ".join(f"{k} = :{k}" for k in fields)
+        fields["plan_id"] = plan_id
+        fields["namespace"] = namespace
+        fields.setdefault("updated_at", _now())
+        with get_conn() as conn:
+            conn.execute(
+                f"UPDATE billing_plans SET {sets}, updated_at = :updated_at WHERE plan_id = :plan_id AND namespace = :namespace",
+                fields,
+            )
+
     def update_installment_by_gateway_payment(
         self, gateway_payment_id: str, subscription_id: str, status: str
     ) -> None:

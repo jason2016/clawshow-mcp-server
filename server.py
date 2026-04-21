@@ -238,6 +238,37 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"received": True})
 
 
+async def stripe_billing_webhook(request: Request) -> JSONResponse:
+    """
+    POST /webhooks/stripe
+    Stripe billing subscription events (IESIG sandbox, 18 events).
+    Signature verified with STRIPE_WEBHOOK_SECRET_IESIG_TEST.
+    """
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    from adapters.stripe.webhook_handler import handle_stripe_billing_webhook
+    result = await handle_stripe_billing_webhook(payload, sig_header, mode="test")
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error", "unknown")}, status_code=400)
+    return JSONResponse({"ok": True, "result": result})
+
+
+async def billing_esign_webhook(request: Request) -> JSONResponse:
+    """
+    POST /webhooks/esign
+    Called by ClawShow eSign engine when a contract is signed/declined/expired.
+    Expected payload: {plan_id, namespace, status, document_id, ...}
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    from engines.billing_engine.esign_integration import handle_esign_callback
+    result = await handle_esign_callback(payload)
+    return JSONResponse(result)
+
+
 # ---------------------------------------------------------------------------
 # PDF report serving
 # ---------------------------------------------------------------------------
@@ -2895,6 +2926,8 @@ def _build_app() -> Starlette:
             Route("/stats", stats, methods=["GET"]),
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
             Route("/webhooks/mollie", mollie_webhook, methods=["POST"]),
+            Route("/webhooks/stripe", stripe_billing_webhook, methods=["POST"]),
+            Route("/webhooks/esign", billing_esign_webhook, methods=["POST"]),
             Route("/reports/{namespace}/{filename}", serve_report, methods=["GET"]),
             Route("/api/booking", api_create_booking, methods=["POST"]),
             Route("/api/booking/checkin", api_checkin_booking, methods=["PATCH"]),

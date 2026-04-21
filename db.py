@@ -599,6 +599,8 @@ def create_dine_order(namespace: str, data: dict) -> dict:
         payment_status = "pending_counter"
     elif payment_method == "cash":
         payment_status = "pending_cash"
+    elif payment_method == "card_terminal":
+        payment_status = "pending_terminal"
     else:
         payment_status = "unpaid"
 

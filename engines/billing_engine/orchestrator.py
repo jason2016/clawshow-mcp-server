@@ -1,13 +1,10 @@
 """
-BillingOrchestrator — Week 1 (2026-04-21)
-Coordinates: DB → Mollie adapter → schedule_calculator.
+BillingOrchestrator — Week 3 (2026-04-21)
+Coordinates: DB → adapter (Mollie/Stripe) → schedule_calculator.
 
-Week 1 scope:
-  ✅ create_plan (Mollie TEST, no scheduler, no eSign)
-  ✅ get_status
-  ❌ APScheduler (Week 2)
-  ❌ eSign integration (Week 3)
-  ❌ Stripe (Week 3)
+Week 1: create_plan (Mollie TEST)
+Week 2: webhook handler, retry scheduler, outbound webhook
+Week 3: Stripe adapter, eSign integration, cancel_plan
 """
 from __future__ import annotations
 
@@ -67,30 +64,33 @@ class BillingOrchestrator:
         plan_id = f"plan_{uuid.uuid4().hex[:12]}"
         mode = get_gateway_mode(self.namespace)
 
-        # --- Mollie: create customer -----------------------------------------
-        try:
-            cust = create_mollie_customer(
-                email=customer_email,
-                name=customer_name,
-                mode=mode,
-                metadata=customer_metadata,
-            )
-            gateway_customer_id = cust["customer_id"]
-        except Exception as exc:
-            logger.error("Mollie create_customer failed: %s", exc)
-            return {"success": False, "error": f"Gateway error creating customer: {exc}"}
-
-        # --- Mollie: create mandate (test mode only) -------------------------
+        # --- Create gateway customer (Mollie only; Stripe creates customer in subscription block) ---
+        gateway_customer_id = ""
         gateway_mandate_id = None
-        if mode == "test" and frequency != "one_time":
+
+        if gateway != "stripe":
             try:
-                mdt = create_test_mandate(
-                    customer_id=gateway_customer_id,
-                    consumer_name=customer_name,
+                cust = create_mollie_customer(
+                    email=customer_email,
+                    name=customer_name,
+                    mode=mode,
+                    metadata=customer_metadata,
                 )
-                gateway_mandate_id = mdt["mandate_id"]
+                gateway_customer_id = cust["customer_id"]
             except Exception as exc:
-                logger.warning("Test mandate creation failed (non-fatal): %s", exc)
+                logger.error("Mollie create_customer failed: %s", exc)
+                return {"success": False, "error": f"Gateway error creating customer: {exc}"}
+
+            # Mollie: create mandate (test mode only)
+            if mode == "test" and frequency != "one_time":
+                try:
+                    mdt = create_test_mandate(
+                        customer_id=gateway_customer_id,
+                        consumer_name=customer_name,
+                    )
+                    gateway_mandate_id = mdt["mandate_id"]
+                except Exception as exc:
+                    logger.warning("Test mandate creation failed (non-fatal): %s", exc)
 
         # --- Mollie: create subscription / one-time ---------------------------
         per_installment = installment_amount(total_amount, installments)
@@ -101,6 +101,34 @@ class BillingOrchestrator:
         if frequency == "one_time":
             # One-time: no subscription, just record plan
             initial_status = "pending_charge"
+        elif gateway == "stripe":
+            try:
+                from adapters.stripe.customer import create_stripe_customer
+                from adapters.stripe.subscription import create_stripe_subscription
+                cust_stripe = create_stripe_customer(
+                    email=customer_email,
+                    name=customer_name,
+                    phone=customer_phone,
+                    metadata=customer_metadata,
+                    mode=mode,
+                )
+                gateway_customer_id = cust_stripe["customer_id"]
+                sub = create_stripe_subscription(
+                    customer_id=gateway_customer_id,
+                    amount=per_installment,
+                    currency=currency,
+                    frequency=frequency,
+                    start_date=start_date,
+                    description=description or f"ClawShow {self.namespace}",
+                    namespace=self.namespace,
+                    plan_id=plan_id,
+                    installments=installments,
+                    mode=mode,
+                )
+                gateway_plan_id = sub["subscription_id"]
+            except Exception as exc:
+                logger.error("Stripe create_subscription failed: %s", exc)
+                return {"success": False, "error": f"Gateway error creating subscription: {exc}"}
         else:
             try:
                 sub = create_mollie_subscription(
@@ -225,6 +253,64 @@ class BillingOrchestrator:
             "created_at": plan["created_at"],
             "updated_at": plan["updated_at"],
         }
+
+
+    def cancel_plan(self, plan_id: str, reason: str = "") -> dict:
+        plan = self.db.get_plan(plan_id, self.namespace)
+        if not plan:
+            return {"success": False, "error": f"Plan '{plan_id}' not found"}
+
+        if plan["status"] in ("cancelled", "completed"):
+            return {"success": False, "error": f"Plan is already {plan['status']}"}
+
+        gateway = plan.get("gateway", "mollie")
+        gateway_plan_id = plan.get("gateway_plan_id")
+        mode = plan.get("gateway_mode", "test")
+
+        # Cancel at gateway level if subscription exists
+        if gateway_plan_id:
+            if gateway == "mollie":
+                try:
+                    from adapters.mollie.subscription import cancel_mollie_subscription
+                    cancel_mollie_subscription(
+                        customer_id=plan["gateway_customer_id"],
+                        subscription_id=gateway_plan_id,
+                        mode=mode,
+                    )
+                except Exception as exc:
+                    logger.warning("Mollie cancel_subscription failed (non-fatal): %s", exc)
+            elif gateway == "stripe":
+                try:
+                    from adapters.stripe.subscription import cancel_stripe_subscription
+                    cancel_stripe_subscription(subscription_id=gateway_plan_id, mode=mode)
+                except Exception as exc:
+                    logger.warning("Stripe cancel_subscription failed (non-fatal): %s", exc)
+
+        self.db.cancel_pending_installments(plan_id)
+        self.db.update_plan_status(plan_id, self.namespace, "cancelled")
+
+        if plan.get("external_webhook_url"):
+            from core.webhook_sender import send_webhook
+            send_webhook(
+                webhook_url=plan["external_webhook_url"],
+                event="plan_cancelled",
+                plan_id=plan_id,
+                namespace=self.namespace,
+                data={"reason": reason or "api_request"},
+                auth_token=plan.get("external_auth_token"),
+                external_order_id=plan.get("external_order_id"),
+            )
+
+        return {"success": True, "plan_id": plan_id, "status": "cancelled"}
+
+    def activate_subscription_for_plan(self, plan_id: str) -> dict:
+        """Called after eSign callback: flip plan from pending_signature to active."""
+        plan = self.db.get_plan(plan_id, self.namespace)
+        if not plan:
+            return {"success": False, "error": f"Plan '{plan_id}' not found"}
+        new_status = "pending_charge" if plan["frequency"] == "one_time" else "active"
+        self.db.update_plan_status(plan_id, self.namespace, new_status)
+        return {"success": True, "plan_id": plan_id, "new_status": new_status}
 
 
 def _mollie_interval(frequency: str) -> str:

@@ -82,9 +82,6 @@ def register(mcp, record_call: Callable) -> None:
         if gateway not in ("mollie", "stripe"):
             return {"success": False, "error": f"Unknown gateway: {gateway}. Use 'mollie' or 'stripe'"}
 
-        if gateway == "stripe":
-            return {"success": False, "error": "Stripe gateway available in Week 3. Use 'mollie' for now."}
-
         if frequency not in ("monthly", "quarterly", "weekly", "one_time"):
             return {"success": False, "error": "frequency must be: monthly | quarterly | weekly | one_time"}
 
