@@ -1,6 +1,9 @@
 """
 APScheduler singleton for ClawShow Billing.
 
+Uses BackgroundScheduler (thread-based) — works outside async context.
+Async retry functions are run via asyncio.run() in the background thread.
+
 Used for:
   ✅ Scheduling retries of failed charges (24h/48h/72h delay)
   ✅ Retrying failed outbound webhooks
@@ -9,21 +12,22 @@ Used for:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 
 logger = logging.getLogger(__name__)
 
-_scheduler: AsyncIOScheduler | None = None
+_scheduler: BackgroundScheduler | None = None
 
 
-def get_scheduler() -> AsyncIOScheduler:
+def get_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is None:
-        _scheduler = AsyncIOScheduler()
+        _scheduler = BackgroundScheduler()
     return _scheduler
 
 
@@ -58,7 +62,7 @@ def cancel_installment_retry(installment_id: int) -> None:
         pass
 
 
-async def _run_installment_retry(installment_id: int, namespace: str) -> None:
-    """Executed by APScheduler at retry time."""
+def _run_installment_retry(installment_id: int, namespace: str) -> None:
+    """Executed by BackgroundScheduler (thread context) at retry time."""
     from engines.billing_engine.retry_manager import execute_retry
-    await execute_retry(installment_id=installment_id, namespace=namespace)
+    asyncio.run(execute_retry(installment_id=installment_id, namespace=namespace))

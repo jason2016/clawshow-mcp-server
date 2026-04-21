@@ -2887,14 +2887,8 @@ async def serve_docs_esign_md(request: Request):
 # Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
 
-async def _on_startup() -> None:
-    from engines.billing_engine.scheduler import start_scheduler
-    start_scheduler()
-
-
 def _build_app() -> Starlette:
     return Starlette(
-        on_startup=[_on_startup],
         routes=[
             Route("/docs/esign", serve_docs_esign, methods=["GET"]),
             Route("/docs/esign-api-reference.md", serve_docs_esign_md, methods=["GET"]),
@@ -3013,5 +3007,7 @@ if __name__ == "__main__":
     else:
         print(f"ClawShow MCP Server starting — http://{_host}:{_port}/sse")
         print(f"Stats endpoint           — http://{_host}:{_port}/stats")
+        from engines.billing_engine.scheduler import start_scheduler
+        start_scheduler()
         app = _build_app()
         uvicorn.run(app, host=_host, port=_port)
