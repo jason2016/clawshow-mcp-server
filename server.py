@@ -165,6 +165,29 @@ async def stats(request: Request) -> JSONResponse:
 PAYMENTS_DIR = Path(__file__).parent / "data" / "payments"
 
 
+async def mollie_webhook(request: Request) -> JSONResponse:
+    """
+    POST /webhooks/mollie
+    Mollie POSTs {"id": "tr_xxx"} when a payment status changes.
+    We fetch the payment, update installment status in billing.db.
+    """
+    try:
+        body = await request.form()
+        payment_id = body.get("id") or ""
+        if not payment_id:
+            data = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+            payment_id = data.get("id", "")
+    except Exception:
+        payment_id = ""
+
+    if not payment_id:
+        return JSONResponse({"error": "missing payment id"}, status_code=400)
+
+    from adapters.mollie.webhook_handler import handle_mollie_webhook
+    result = handle_mollie_webhook(payment_id)
+    return JSONResponse({"ok": True, "result": result})
+
+
 async def stripe_webhook(request: Request) -> JSONResponse:
     """
     POST /webhook/stripe
@@ -2868,6 +2891,7 @@ def _build_app() -> Starlette:
             Route("/docs/esign-api-reference.md", serve_docs_esign_md, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
+            Route("/webhooks/mollie", mollie_webhook, methods=["POST"]),
             Route("/reports/{namespace}/{filename}", serve_report, methods=["GET"]),
             Route("/api/booking", api_create_booking, methods=["POST"]),
             Route("/api/booking/checkin", api_checkin_booking, methods=["PATCH"]),

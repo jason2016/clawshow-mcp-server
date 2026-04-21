@@ -135,6 +135,37 @@ class BillingDB:
                 fields,
             )
 
+    def update_installment_by_gateway_payment(
+        self, gateway_payment_id: str, subscription_id: str, status: str
+    ) -> None:
+        """Called from Mollie webhook: match installment by subscription_id, update status."""
+        now = _now()
+        with get_conn() as conn:
+            # Find plan by gateway_plan_id (subscription_id)
+            plan = conn.execute(
+                "SELECT plan_id FROM billing_plans WHERE gateway_plan_id = ?",
+                (subscription_id,),
+            ).fetchone()
+            if not plan:
+                return
+            plan_id = plan["plan_id"]
+            # Find earliest scheduled installment for this plan
+            row = conn.execute(
+                """SELECT id FROM billing_installments
+                   WHERE plan_id = ? AND status = 'scheduled'
+                   ORDER BY installment_number LIMIT 1""",
+                (plan_id,),
+            ).fetchone()
+            if not row:
+                return
+            charged_at = now if status == "charged" else None
+            conn.execute(
+                """UPDATE billing_installments
+                   SET status = ?, gateway_payment_id = ?, charged_at = ?
+                   WHERE id = ?""",
+                (status, gateway_payment_id, charged_at, row["id"]),
+            )
+
     # -------------------------------------------------------------- commissions
 
     def record_commission(self, commission: dict) -> None:
