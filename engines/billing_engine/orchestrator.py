@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from storage.billing_db import BillingDB
 from engines.billing_engine.schedule_calculator import calculate_schedule, installment_amount
 from adapters.mollie.customer import create_mollie_customer
+from adapters.mollie.mandate import create_test_mandate
 from adapters.mollie.subscription import create_mollie_subscription
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,18 @@ class BillingOrchestrator:
             logger.error("Mollie create_customer failed: %s", exc)
             return {"success": False, "error": f"Gateway error creating customer: {exc}"}
 
+        # --- Mollie: create mandate (test mode only) -------------------------
+        gateway_mandate_id = None
+        if mode == "test" and frequency != "one_time":
+            try:
+                mdt = create_test_mandate(
+                    customer_id=gateway_customer_id,
+                    consumer_name=customer_name,
+                )
+                gateway_mandate_id = mdt["mandate_id"]
+            except Exception as exc:
+                logger.warning("Test mandate creation failed (non-fatal): %s", exc)
+
         # --- Mollie: create subscription / one-time ---------------------------
         per_installment = installment_amount(total_amount, installments)
 
@@ -127,7 +140,7 @@ class BillingOrchestrator:
             "gateway": gateway,
             "gateway_plan_id": gateway_plan_id,
             "gateway_customer_id": gateway_customer_id,
-            "gateway_mandate_id": None,
+            "gateway_mandate_id": gateway_mandate_id,
             "gateway_mode": mode,
             "contract_required": contract_required,
             "contract_pdf_url": contract_pdf_url,
