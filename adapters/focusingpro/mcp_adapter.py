@@ -7,21 +7,44 @@ Uses 3 already-tested tools (no new development needed from Richard):
   2. payment_register_online_receipt — register payment receipt
   3. payment_confirm_received    — confirm payment (NewCreate → Confirmed)
 
+URL convention:
+  {FOCUSINGPRO_MCP_BASE_URL_{ENV}}/FocusingPro/{enterprise_code}/mcp
+  e.g. https://stand3.focusingpro.com:8443/FocusingPro/UEGroup/mcp
+
 Token env var convention: FOCUSINGPRO_TOKEN_{NAMESPACE_UPPER}
-  e.g. FOCUSINGPRO_TOKEN_EPP_IESIG for namespace "epp-iesig"
+  Fallback: FOCUSINGPRO_ADMIN_TOKEN
 """
 from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-_MCP_URL = os.environ.get("FOCUSINGPRO_MCP_URL", "https://mcp.focusingpro.com/mcp")
+
+def _build_mcp_url(namespace: str) -> str:
+    env = os.environ.get("FOCUSINGPRO_ENV", "test")
+    base_env = f"FOCUSINGPRO_MCP_BASE_URL_{env.upper()}"
+    base = os.environ.get(base_env)
+
+    ent_env = f"FOCUSINGPRO_ENTERPRISE_{namespace.upper().replace('-', '_')}"
+    enterprise = os.environ.get(ent_env)
+
+    if base and enterprise:
+        return f"{base}/FocusingPro/{enterprise}/mcp"
+
+    # Legacy fallback: explicit full URL
+    legacy = os.environ.get("FOCUSINGPRO_MCP_URL")
+    if legacy:
+        return legacy
+
+    raise ValueError(
+        f"Cannot build FocusingPro MCP URL. "
+        f"Need either ({base_env} + {ent_env}) or FOCUSINGPRO_MCP_URL."
+    )
 
 
 class FocusingProMCPError(Exception):
@@ -33,9 +56,9 @@ class FocusingProMCPAdapter:
     Async context manager for FocusingPro MCP calls.
 
     Usage:
-        async with FocusingProMCPAdapter(namespace="epp-iesig") as fp:
+        async with FocusingProMCPAdapter(namespace="ilci-william") as fp:
             result = await fp.writeback_payment(
-                inscription_code="EPP2026_0001",
+                inscription_code="UEG2026_0001",
                 amount=1200.0,
                 transaction_id="tr_mollie_xxx",
                 paid_at="2026-05-15",
@@ -45,14 +68,16 @@ class FocusingProMCPAdapter:
 
     def __init__(self, namespace: str):
         self.namespace = namespace
-        self.mcp_url = _MCP_URL
+        self.mcp_url = _build_mcp_url(namespace)
 
         token_env = f"FOCUSINGPRO_TOKEN_{namespace.upper().replace('-', '_')}"
-        self.token = os.environ.get(token_env)
+        self.token = (
+            os.environ.get(token_env)
+            or os.environ.get("FOCUSINGPRO_ADMIN_TOKEN")
+        )
         if not self.token:
             raise ValueError(
-                f"Missing env var: {token_env}. "
-                f"Configure FocusingPro token for namespace '{namespace}'."
+                f"Missing FocusingPro token. Set {token_env} or FOCUSINGPRO_ADMIN_TOKEN."
             )
 
         module_env = f"FOCUSINGPRO_MODULE_{namespace.upper().replace('-', '_')}"

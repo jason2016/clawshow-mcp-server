@@ -9,7 +9,10 @@ billing:
   default_gateway: "mollie"
   commission_rate: 0.005
 external:
-  platform: null
+  platform: "focusingpro"
+  enterprise_code: "UEGroup"
+  modules: ["ES", "LANG"]
+  token_env: "FOCUSINGPRO_TOKEN_ILCI_WILLIAM"
 notification:
   email_from: "hello@clawshow.ai"
   email_from_name: "ILCI"
