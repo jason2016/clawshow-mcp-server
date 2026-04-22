@@ -45,7 +45,14 @@ async def handle_mollie_webhook(payment_id: str) -> Dict:
     logger.info("Mollie webhook: %s status=%s sub=%s", payment_id, status, subscription_id)
 
     if not subscription_id:
-        # Not a subscription payment — log and return
+        # One-off payment page payment — handle via metadata
+        metadata = payment._get_property("metadata") or {}
+        token = metadata.get("token")
+        plan_id = metadata.get("plan_id")
+        installment_no = metadata.get("installment_no")
+        namespace = metadata.get("namespace")
+        if plan_id and installment_no is not None and namespace:
+            return await _handle_payment_page_payment(payment_id, status, plan_id, installment_no, namespace, token)
         return {"success": True, "action_taken": "not_a_subscription_payment"}
 
     db = BillingDB()
@@ -68,6 +75,58 @@ async def handle_mollie_webhook(payment_id: str) -> Dict:
         return await _handle_failed(db, plan, installment, payment_id, namespace, payment)
     else:
         return {"success": True, "action_taken": f"no_action_status_{status}"}
+
+
+async def _handle_payment_page_payment(
+    payment_id: str, status: str, plan_id: str, installment_no: int, namespace: str, token: str | None
+) -> Dict:
+    """Handle one-off payment page payments (no subscriptionId in metadata)."""
+    db = BillingDB()
+    db.init_tables()
+
+    installments = db.get_installments(plan_id)
+    installment = next((i for i in installments if i["installment_number"] == installment_no), None)
+
+    logger.info("payment_page webhook: payment=%s status=%s plan=%s inst=%d",
+                payment_id, status, plan_id, installment_no)
+
+    if status == "paid":
+        now = _now()
+        if installment:
+            db.update_installment(installment["id"],
+                                  status="charged",
+                                  gateway_payment_id=payment_id,
+                                  charged_at=now)
+            amount = installment["amount"]
+        else:
+            amount = 0.0
+
+        # Mark token paid
+        if token:
+            from core.payment_token import mark_token_paid
+            mark_token_paid(token)
+
+        # Commission
+        commission_amount = round(float(amount) * 0.005, 4)
+        db.record_commission({
+            "namespace": namespace,
+            "plan_id": plan_id,
+            "installment_id": installment["id"] if installment else None,
+            "transaction_amount": amount,
+            "commission_rate": 0.005,
+            "commission_amount": commission_amount,
+        })
+
+        return {"success": True, "action_taken": "payment_page_paid", "plan_id": plan_id}
+
+    elif status == "failed":
+        if installment:
+            db.update_installment(installment["id"],
+                                  status="failed",
+                                  gateway_payment_id=payment_id)
+        return {"success": True, "action_taken": "payment_page_failed", "plan_id": plan_id}
+
+    return {"success": True, "action_taken": f"payment_page_no_action_{status}"}
 
 
 async def _handle_paid(db: BillingDB, plan: dict, installment: dict | None, payment_id: str, namespace: str) -> Dict:
