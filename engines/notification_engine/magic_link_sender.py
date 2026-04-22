@@ -94,12 +94,12 @@ class MagicLinkSender:
 
         resend.api_key = api_key
         try:
-            params = resend.Emails.SendParams(
-                from_=f"{from_name} <{from_email}>",
-                to=[to],
-                subject=subject,
-                html=html,
-            )
+            params = {
+                "from": f"{from_name} <{from_email}>",
+                "to": [to],
+                "subject": subject,
+                "html": html,
+            }
             result = resend.Emails.send(params)
             logger.info("Email sent: id=%s to=%s subject=%s", result.get("id"), to, subject)
             return True
