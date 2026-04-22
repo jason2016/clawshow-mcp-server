@@ -1,21 +1,18 @@
 """
-FocusingPro MCP Adapter — Week 2 (2026-04-22)
+FocusingPro MCP Adapter — Week 2 (2026-04-22, v2)
 
-Calls FocusingPro MCP Server using standard MCP JSON-RPC over HTTP.
-Uses 3 already-tested tools (no new development needed from Richard):
-  1. inscription_query          — find student by inscription_code
-  2. payment_register_online_receipt — register payment receipt
-  3. payment_confirm_received    — confirm payment (NewCreate → Confirmed)
+Protocol: MCP HTTP+SSE (mcp.focusingpro.com/mcp)
+  1. POST /mcp  initialize          → get mcp-session-id header
+  2. POST /mcp  notifications/initialized  (no response needed)
+  3. POST /mcp  tools/call          → SSE event with result
 
-URL convention:
-  {FOCUSINGPRO_MCP_BASE_URL_{ENV}}/FocusingPro/{enterprise_code}/mcp
-  e.g. https://stand3.focusingpro.com:8443/FocusingPro/UEGroup/mcp
-
-Token env var convention: FOCUSINGPRO_TOKEN_{NAMESPACE_UPPER}
+URL env var: FOCUSINGPRO_MCP_URL (full URL, e.g. https://mcp.focusingpro.com/mcp)
+Token env var: FOCUSINGPRO_TOKEN_{NAMESPACE_UPPER}
   Fallback: FOCUSINGPRO_ADMIN_TOKEN
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -24,27 +21,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_MCP_URL = "https://mcp.focusingpro.com/mcp"
 
-def _build_mcp_url(namespace: str) -> str:
-    env = os.environ.get("FOCUSINGPRO_ENV", "test")
-    base_env = f"FOCUSINGPRO_MCP_BASE_URL_{env.upper()}"
-    base = os.environ.get(base_env)
 
-    ent_env = f"FOCUSINGPRO_ENTERPRISE_{namespace.upper().replace('-', '_')}"
-    enterprise = os.environ.get(ent_env)
-
-    if base and enterprise:
-        return f"{base}/FocusingPro/{enterprise}/mcp"
-
-    # Legacy fallback: explicit full URL
-    legacy = os.environ.get("FOCUSINGPRO_MCP_URL")
-    if legacy:
-        return legacy
-
-    raise ValueError(
-        f"Cannot build FocusingPro MCP URL. "
-        f"Need either ({base_env} + {ent_env}) or FOCUSINGPRO_MCP_URL."
-    )
+def _get_mcp_url() -> str:
+    return os.environ.get("FOCUSINGPRO_MCP_URL", _DEFAULT_MCP_URL)
 
 
 class FocusingProMCPError(Exception):
@@ -68,7 +49,7 @@ class FocusingProMCPAdapter:
 
     def __init__(self, namespace: str):
         self.namespace = namespace
-        self.mcp_url = _build_mcp_url(namespace)
+        self.mcp_url = _get_mcp_url()
 
         token_env = f"FOCUSINGPRO_TOKEN_{namespace.upper().replace('-', '_')}"
         self.token = (
@@ -81,48 +62,94 @@ class FocusingProMCPAdapter:
             )
 
         module_env = f"FOCUSINGPRO_MODULE_{namespace.upper().replace('-', '_')}"
-        self.module = os.environ.get(module_env, "ES")
+        self.module = os.environ.get(module_env, "enseignement_superieur")
 
         self._client: Optional[httpx.AsyncClient] = None
+        self._session_id: Optional[str] = None
         self._call_counter = 0
 
     async def __aenter__(self):
         self._client = httpx.AsyncClient(
             timeout=30.0,
             headers={
-                "Authorization": f"Bearer {self.token}",
+                "Authorization": self.token,
                 "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
             },
         )
+        await self._initialize_session()
         return self
 
     async def __aexit__(self, *_):
         if self._client:
             await self._client.aclose()
             self._client = None
+        self._session_id = None
 
     # ------------------------------------------------------------------
-    # Core MCP call (standard JSON-RPC 2.0 over HTTP)
+    # Session management
+    # ------------------------------------------------------------------
+
+    async def _initialize_session(self) -> None:
+        """
+        MCP HTTP+SSE handshake:
+          POST initialize → capture mcp-session-id header
+          POST notifications/initialized (fire-and-forget)
+        """
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "init",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "clawshow-mcp-server", "version": "2.0"},
+            },
+        }
+        try:
+            resp = await self._client.post(self.mcp_url, json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise FocusingProMCPError(
+                f"FocusingPro initialize failed: HTTP {exc.response.status_code}"
+            ) from exc
+
+        self._session_id = resp.headers.get("mcp-session-id")
+        if not self._session_id:
+            raise FocusingProMCPError(
+                "FocusingPro initialize returned no mcp-session-id header"
+            )
+
+        logger.debug("FocusingPro session: %s", self._session_id)
+
+        # Notify server we're ready (fire-and-forget)
+        try:
+            await self._client.post(
+                self.mcp_url,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+                headers={"mcp-session-id": self._session_id},
+            )
+        except Exception:
+            pass  # non-fatal
+
+    # ------------------------------------------------------------------
+    # Core MCP call
     # ------------------------------------------------------------------
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict:
         """
-        Call a FocusingPro MCP tool via JSON-RPC 2.0.
+        Call a FocusingPro MCP tool via HTTP+SSE JSON-RPC.
 
-        The FocusingPro MCP server uses the standard MCP HTTP transport:
-          POST /mcp
-          {"jsonrpc":"2.0","id":N,"method":"tools/call","params":{"name":...,"arguments":{...}}}
-
-        Returns the tool result dict (content unwrapped).
+        Response is SSE: parse 'data: {...}' lines and unwrap content[0].text.
         Raises FocusingProMCPError on any failure.
         """
-        if not self._client:
+        if not self._client or not self._session_id:
             raise RuntimeError("Use FocusingProMCPAdapter as async context manager")
 
         self._call_counter += 1
         payload = {
             "jsonrpc": "2.0",
-            "id": self._call_counter,
+            "id": str(self._call_counter),
             "method": "tools/call",
             "params": {
                 "name": tool_name,
@@ -130,10 +157,14 @@ class FocusingProMCPAdapter:
             },
         }
 
-        logger.info("FocusingPro MCP call: tool=%s ns=%s", tool_name, self.namespace)
+        logger.info("FocusingPro call: tool=%s ns=%s", tool_name, self.namespace)
 
         try:
-            resp = await self._client.post(self.mcp_url, json=payload)
+            resp = await self._client.post(
+                self.mcp_url,
+                json=payload,
+                headers={"mcp-session-id": self._session_id},
+            )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
             logger.error("FocusingPro HTTP error: tool=%s status=%d body=%s",
@@ -145,25 +176,38 @@ class FocusingProMCPAdapter:
             logger.error("FocusingPro network error: tool=%s error=%s", tool_name, exc)
             raise FocusingProMCPError(str(exc)) from exc
 
-        data = resp.json()
+        return self._parse_sse_response(resp.text, tool_name)
 
-        # JSON-RPC error
-        if "error" in data:
-            err = data["error"]
-            raise FocusingProMCPError(f"MCP error {err.get('code')}: {err.get('message')}")
+    def _parse_sse_response(self, raw: str, tool_name: str) -> Dict:
+        """Parse SSE 'data: {...}' lines and unwrap MCP content."""
+        for line in raw.splitlines():
+            if not line.startswith("data: "):
+                continue
+            try:
+                data = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
 
-        # Unwrap MCP result content
-        result = data.get("result", {})
-        content = result.get("content", [])
-        if content and isinstance(content, list):
-            first = content[0]
-            if isinstance(first, dict) and first.get("type") == "text":
-                import json as _json
-                try:
-                    return _json.loads(first["text"])
-                except Exception:
-                    return {"raw": first["text"]}
-        return result
+            if "error" in data:
+                err = data["error"]
+                raise FocusingProMCPError(
+                    f"MCP error {err.get('code')}: {err.get('message')}"
+                )
+
+            result = data.get("result", {})
+            content = result.get("content", [])
+            if content and isinstance(content, list):
+                first = content[0]
+                if isinstance(first, dict) and first.get("type") == "text":
+                    try:
+                        return json.loads(first["text"])
+                    except Exception:
+                        return {"raw": first["text"]}
+            return result
+
+        raise FocusingProMCPError(
+            f"No parseable SSE data line in response for tool={tool_name}"
+        )
 
     # ------------------------------------------------------------------
     # Step 1: Find inscription
@@ -172,9 +216,12 @@ class FocusingProMCPAdapter:
     async def find_inscription(self, inscription_code: str) -> Optional[Dict]:
         """Find student inscription by code. Returns first match or None."""
         result = await self.call_tool("inscription_query", {
-            "inscription_code": inscription_code,
+            "params": {
+                "inscription_code": inscription_code,
+                "page_size": 1,
+                "page": 1,
+            },
             "module": self.module,
-            "page_size": 1,
         })
         records = result.get("records") or result.get("data") or result.get("items") or []
         if not records:
@@ -197,20 +244,19 @@ class FocusingProMCPAdapter:
         """
         Register an online payment receipt in FocusingPro.
         Returns the collect_pay_id for Step 3.
-
-        Parameter name variants are handled by trying known aliases.
         """
         result = await self.call_tool("payment_register_online_receipt", {
-            "inscription_id": inscription_id,
-            "amount": amount,
-            "external_reference": transaction_id,
-            "paid_at": paid_at,
-            "payment_method": "Online",
-            "note": f"ClawShow auto-writeback via {gateway}",
+            "params": {
+                "inscription_id": inscription_id,
+                "amount": amount,
+                "external_reference": transaction_id,
+                "paid_at": paid_at,
+                "payment_method": "Online",
+                "note": f"ClawShow auto-writeback via {gateway}",
+            },
             "module": self.module,
         })
 
-        # Try known field name variants for the returned record ID
         collect_pay_id = (
             result.get("collect_pay_id")
             or result.get("MyRangeKey")
@@ -231,8 +277,9 @@ class FocusingProMCPAdapter:
     async def confirm_payment(self, collect_pay_id: str) -> Dict:
         """Confirm receipt (NewCreate → Confirmed)."""
         return await self.call_tool("payment_confirm_received", {
-            "collect_pay_id": collect_pay_id,
-            "module": self.module,
+            "params": {
+                "collect_pay_id": collect_pay_id,
+            },
         })
 
     # ------------------------------------------------------------------
@@ -242,18 +289,20 @@ class FocusingProMCPAdapter:
     async def verify_payment_exists(self, transaction_id: str) -> bool:
         """
         Check if this transaction_id is already recorded in FocusingPro.
-        Conservative: returns False on error (let caller proceed and handle duplicate).
+        Conservative: returns False on error.
         """
         try:
             result = await self.call_tool("collect_pay_query", {
-                "external_reference": transaction_id,
-                "module": self.module,
-                "page_size": 1,
+                "params": {
+                    "external_reference": transaction_id,
+                    "page_size": 1,
+                    "page": 1,
+                },
             })
             records = result.get("records") or result.get("data") or result.get("items") or []
             exists = len(records) > 0
             if exists:
-                logger.info("verify_payment_exists: transaction %s already in FocusingPro", transaction_id)
+                logger.info("verify_payment_exists: %s already in FocusingPro", transaction_id)
             return exists
         except FocusingProMCPError as exc:
             logger.warning("verify_payment_exists fallback (error: %s) — assuming not exists", exc)
@@ -279,7 +328,7 @@ class FocusingProMCPAdapter:
                 "success": bool,
                 "focusingpro_record_id": str | None,
                 "inscription_code": str,
-                "steps_completed": list[str],   # ["find", "register", "confirm"]
+                "steps_completed": list[str],
                 "error": str | None,
             }
         """
@@ -304,6 +353,7 @@ class FocusingProMCPAdapter:
                 or inscription.get("range_key")
                 or inscription.get("inscription_id")
                 or inscription.get("id")
+                or inscription.get("code")
             )
             if not inscription_id:
                 result["error"] = f"Cannot extract inscription_id from record: {list(inscription.keys())}"
