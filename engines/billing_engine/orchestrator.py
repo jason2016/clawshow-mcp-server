@@ -246,6 +246,20 @@ class BillingOrchestrator:
             else:
                 logger.warning("eSign trigger failed (non-fatal): %s", esign_result.get("error"))
 
+        # --- Send magic link email (non-contract plans only) -----------------
+        # Contract plans wait for eSign callback before sending the payment link
+        if not skip_subscription and first_token and customer_email:
+            try:
+                from engines.notification_engine.magic_link_sender import send_magic_link_initial
+                send_magic_link_initial(
+                    plan_id=plan_id,
+                    installment_no=1 if installments != -1 else 0,
+                    namespace=self.namespace,
+                    token=first_token,
+                )
+            except Exception as exc:
+                logger.warning("Magic link email failed (non-fatal): %s", exc)
+
         # --- External webhook ------------------------------------------------
         if external_webhook_url:
             from engines.billing_engine.webhook_sender import send_external_webhook_sync

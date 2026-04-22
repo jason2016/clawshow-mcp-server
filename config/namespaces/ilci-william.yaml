@@ -1,0 +1,16 @@
+namespace: ilci-william
+brand:
+  name: "ILCI Paris"
+  logo_url: ""
+  primary_color: "#1A3C6E"
+  support_email: "scolarite@ilci.fr"
+  support_phone: ""
+billing:
+  default_gateway: "mollie"
+  commission_rate: 0.005
+external:
+  platform: null
+notification:
+  email_from: "hello@clawshow.ai"
+  email_from_name: "ILCI"
+  language: "fr"

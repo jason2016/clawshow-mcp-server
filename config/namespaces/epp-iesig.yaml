@@ -1,0 +1,19 @@
+namespace: epp-iesig
+brand:
+  name: "IESIG"
+  logo_url: ""
+  primary_color: "#003366"
+  support_email: "direction@iesig.fr"
+  support_phone: ""
+billing:
+  default_gateway: "mollie"
+  commission_rate: 0.005
+external:
+  platform: "focusingpro"
+  mcp_url: "https://mcp.focusingpro.com/mcp"
+  token_env_var: "FOCUSINGPRO_TOKEN_EPP_IESIG"
+  module: "ES"
+notification:
+  email_from: "hello@clawshow.ai"
+  email_from_name: "IESIG"
+  language: "fr"

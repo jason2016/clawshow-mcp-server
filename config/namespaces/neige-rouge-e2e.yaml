@@ -1,0 +1,16 @@
+namespace: neige-rouge-e2e
+brand:
+  name: "Restaurant Neige Rouge"
+  logo_url: ""
+  primary_color: "#C41E3A"
+  support_email: "contact@neige-rouge.fr"
+  support_phone: ""
+billing:
+  default_gateway: "mollie"
+  commission_rate: 0.005
+external:
+  platform: null
+notification:
+  email_from: "hello@clawshow.ai"
+  email_from_name: "Restaurant Neige Rouge"
+  language: "fr"

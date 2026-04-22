@@ -1,0 +1,16 @@
+namespace: dragons-elysees
+brand:
+  name: "Dragons des Champs-Élysées"
+  logo_url: ""
+  primary_color: "#D4AF37"
+  support_email: "contact@dragons-elysees.fr"
+  support_phone: ""
+billing:
+  default_gateway: "mollie"
+  commission_rate: 0.005
+external:
+  platform: null
+notification:
+  email_from: "hello@clawshow.ai"
+  email_from_name: "Dragons Elysées"
+  language: "fr"
