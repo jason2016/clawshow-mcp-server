@@ -117,6 +117,18 @@ async def _handle_payment_page_payment(
             "commission_amount": commission_amount,
         })
 
+        # FocusingPro writeback (non-fatal — only for namespaces that have FP token)
+        if installment:
+            plan = db.get_plan(plan_id, namespace)
+            if plan and plan.get("external_order_id"):
+                await _writeback_to_focusingpro(
+                    db=db,
+                    plan=plan,
+                    installment=installment,
+                    payment_id=payment_id,
+                    paid_at=now,
+                )
+
         return {"success": True, "action_taken": "payment_page_paid", "plan_id": plan_id}
 
     elif status == "failed":
@@ -300,3 +312,107 @@ def _classify_failure(reason: str) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def _writeback_to_focusingpro(
+    db: BillingDB,
+    plan: dict,
+    installment: dict,
+    payment_id: str,
+    paid_at: str,
+) -> None:
+    """
+    Non-fatal FocusingPro writeback. Called after successful payment.
+    Only runs when:
+      - plan.external_order_id is set (inscription_code)
+      - FOCUSINGPRO_TOKEN_{NAMESPACE} env var is configured
+
+    Stores writeback_status on the installment regardless of outcome.
+    Sends alert email on failure.
+    """
+    namespace = plan["namespace"]
+    inscription_code = plan.get("external_order_id", "")
+    amount = installment.get("amount", 0.0)
+    installment_id = installment["id"]
+
+    try:
+        from adapters.focusingpro.mcp_adapter import FocusingProMCPAdapter, FocusingProMCPError
+
+        token_env = f"FOCUSINGPRO_TOKEN_{namespace.upper().replace('-', '_')}"
+        if not __import__("os").environ.get(token_env):
+            logger.debug("_writeback_to_focusingpro: no token for namespace=%s, skipping", namespace)
+            return
+
+        # Idempotency check
+        async with FocusingProMCPAdapter(namespace=namespace) as fp:
+            already_exists = await fp.verify_payment_exists(payment_id)
+            if already_exists:
+                db.update_installment(installment_id,
+                                      writeback_status="skipped",
+                                      writeback_error="Already exists in FocusingPro",
+                                      writeback_attempted_at=_now())
+                return
+
+            result = await fp.writeback_payment(
+                inscription_code=inscription_code,
+                amount=float(amount),
+                transaction_id=payment_id,
+                paid_at=paid_at[:10],  # YYYY-MM-DD
+                gateway=plan.get("gateway", "mollie"),
+            )
+
+        db.update_installment(
+            installment_id,
+            focusingpro_record_id=result.get("focusingpro_record_id"),
+            writeback_status="success" if result["success"] else "failed",
+            writeback_error=result.get("error"),
+            writeback_steps_completed=",".join(result.get("steps_completed", [])),
+            writeback_attempted_at=_now(),
+        )
+
+        if not result["success"]:
+            _send_writeback_alert(plan, installment, payment_id, result)
+
+        logger.info("writeback_to_focusingpro: ns=%s inscription=%s status=%s",
+                    namespace, inscription_code, "success" if result["success"] else "failed")
+
+    except ValueError:
+        # No token configured — silent skip
+        logger.debug("_writeback_to_focusingpro: token not configured for ns=%s", namespace)
+    except Exception as exc:
+        logger.error("_writeback_to_focusingpro unexpected error: ns=%s error=%s", namespace, exc)
+        try:
+            db.update_installment(installment_id,
+                                  writeback_status="failed",
+                                  writeback_error=str(exc),
+                                  writeback_attempted_at=_now())
+        except Exception:
+            pass
+
+
+def _send_writeback_alert(plan: dict, installment: dict, payment_id: str, result: dict) -> None:
+    """Send alert email when FocusingPro writeback fails."""
+    import os
+    alert_email = os.environ.get("ALERT_EMAIL", "futushow.info@gmail.com")
+    try:
+        import resend
+        resend.api_key = os.environ.get("RESEND_API_KEY", "")
+        if not resend.api_key:
+            return
+        resend.Emails.send({
+            "from": "ClawShow Alerts <hello@clawshow.ai>",
+            "to": [alert_email],
+            "subject": f"[ClawShow] FocusingPro writeback failed — {plan['namespace']}",
+            "html": (
+                f"<p><b>plan_id:</b> {plan['plan_id']}<br>"
+                f"<b>namespace:</b> {plan['namespace']}<br>"
+                f"<b>inscription_code:</b> {plan.get('external_order_id')}<br>"
+                f"<b>payment_id:</b> {payment_id}<br>"
+                f"<b>amount:</b> {installment.get('amount')}<br>"
+                f"<b>steps_completed:</b> {result.get('steps_completed')}<br>"
+                f"<b>error:</b> {result.get('error')}</p>"
+                f"<p>Veuillez vérifier les logs stand9 ou corriger manuellement.</p>"
+            ),
+        })
+    except Exception as exc:
+        logger.error("Failed to send writeback alert email: %s", exc)

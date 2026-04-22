@@ -1,0 +1,1 @@
+# FocusingPro MCP Adapter
