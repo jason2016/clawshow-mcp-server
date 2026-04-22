@@ -2915,6 +2915,16 @@ async def serve_docs_esign_md(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Billing Public Payment Page API (P0-1)
+# ---------------------------------------------------------------------------
+from api.billing_public import (
+    billing_public_get,
+    billing_public_pay,
+    billing_public_status,
+    billing_public_options,
+)
+
+# ---------------------------------------------------------------------------
 # Combined ASGI app (MCP SSE + /stats + /webhook/stripe + /reports + /api)
 # ---------------------------------------------------------------------------
 
@@ -3001,6 +3011,11 @@ def _build_app() -> Starlette:
             # ClawShow SaaS — webhook config
             Route("/webhooks/config", webhooks_config_get,   methods=["GET"]),
             Route("/webhooks/config", webhooks_config_patch, methods=["PATCH"]),
+            # Billing public payment page (P0-1)
+            Route("/api/billing/public/{token}", billing_public_options, methods=["OPTIONS"]),
+            Route("/api/billing/public/{token}", billing_public_get,     methods=["GET"]),
+            Route("/api/billing/public/{token}/pay",    billing_public_pay,    methods=["POST"]),
+            Route("/api/billing/public/{token}/status", billing_public_status, methods=["GET"]),
             Mount("/", app=mcp.sse_app()),
         ],
         middleware=[

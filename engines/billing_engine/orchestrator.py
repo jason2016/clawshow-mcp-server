@@ -194,6 +194,36 @@ class BillingOrchestrator:
         ]
         self.db.create_installments(installment_rows)
 
+        # --- Auto-generate payment tokens for all installments ---------------
+        from core.payment_token import create_token_record
+        payment_page_base = os.environ.get("PAYMENT_PAGE_BASE_URL", "https://clawshow.ai/pay/")
+        first_token = None
+        payment_url = None
+        if installments == -1:
+            # Infinite subscription: generate 1 token for the first charge
+            first_token = create_token_record(
+                plan_id=plan_id,
+                installment_no=0,
+                namespace=self.namespace,
+                amount=per_installment,
+                currency=currency,
+            )
+            payment_url = f"{payment_page_base}{first_token}"
+        else:
+            # Fixed installments: generate a token per installment
+            for inst_row in installment_rows:
+                inst_no = inst_row.get("installment_number", 1)
+                tok = create_token_record(
+                    plan_id=plan_id,
+                    installment_no=inst_no,
+                    namespace=self.namespace,
+                    amount=inst_row.get("amount", per_installment),
+                    currency=currency,
+                )
+                if inst_no == 1:
+                    first_token = tok
+            payment_url = f"{payment_page_base}{first_token}" if first_token else None
+
         # --- Auto-trigger eSign if contract required --------------------------
         esign_request_id = None
         signing_url = None
@@ -244,6 +274,7 @@ class BillingOrchestrator:
             "currency": currency,
             "next_action": "wait_for_signature" if initial_status == "pending_signature" else "active",
             "commission_preview": commission_preview,
+            "payment_url": payment_url,
         }
         if initial_status == "pending_signature":
             result["contract_signing"] = {
