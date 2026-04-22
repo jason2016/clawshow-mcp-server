@@ -214,33 +214,37 @@ class FocusingProMCPAdapter:
     # ------------------------------------------------------------------
 
     async def find_inscription(self, inscription_code: str) -> Optional[Dict]:
-        """Find student inscription by code. Returns first match or None."""
-        result = await self.call_tool("inscription_query", {
-            "module": self.module,
-            "params": {
-                "inscription_code": inscription_code,
-                "page_size": 1,
-                "page": 1,
-            },
-        })
-        # MCP tool may return records directly or inside tableInfo wrapper
-        records = (
-            result.get("records")
-            or result.get("data")
-            or result.get("items")
-            or result.get("tableData", {}).get("records", [])
-            or []
-        )
-        if not records:
-            # Also try matching by inscription_code in a list query
-            result2 = await self.call_tool("inscription_get", {
-                "params": {"inscription_code": inscription_code},
+        """
+        Find student inscription by code. Returns first match or None.
+
+        Tries self.module first; if 0 results, tries the other module.
+        Response uses 'items' key (not 'records'). Item 'code' == inscription_id.
+        """
+        modules_to_try = [self.module]
+        alt_module = "language" if self.module != "language" else "enseignement_superieur"
+        modules_to_try.append(alt_module)
+
+        for module in modules_to_try:
+            result = await self.call_tool("inscription_query", {
+                "module": module,
+                "params": {
+                    "inscription_code": inscription_code,
+                    "page_size": 1,
+                    "page": 1,
+                },
             })
-            if result2 and not result2.get("error"):
-                return result2
-            logger.warning("inscription_query: no record for code=%s", inscription_code)
-            return None
-        return records[0]
+            items = (
+                result.get("items")
+                or result.get("records")
+                or result.get("data")
+                or []
+            )
+            if items:
+                logger.info("find_inscription: found code=%s in module=%s", inscription_code, module)
+                return items[0]
+
+        logger.warning("inscription_query: no record for code=%s in any module", inscription_code)
+        return None
 
     # ------------------------------------------------------------------
     # Step 2: Register online receipt
@@ -372,11 +376,11 @@ class FocusingProMCPAdapter:
             result["steps_completed"].append("find")
 
             inscription_id = (
-                inscription.get("MyRangeKey")
+                inscription.get("code")        # standard field from inscription_query
+                or inscription.get("MyRangeKey")
                 or inscription.get("range_key")
                 or inscription.get("inscription_id")
                 or inscription.get("id")
-                or inscription.get("code")
             )
             if not inscription_id:
                 result["error"] = f"Cannot extract inscription_id from record: {list(inscription.keys())}"
