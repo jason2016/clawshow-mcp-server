@@ -166,7 +166,12 @@ async def billing_public_get(request: Request) -> JSONResponse:
     logger.info("billing_public_get: token=**** plan=%s inst=%d status=%s ip=%s",
                 record["plan_id"], installment_no, pay_status, ip)
 
+    # Top-level status so frontend can dispatch on it
+    # "paid" / "pending" / "failed" map to frontend states; "ready" = pending (unpaid)
+    top_status = "paid" if pay_status == "paid" else "ready"
+
     return JSONResponse({
+        "status": top_status,
         "namespace": record["namespace"],
         "brand": brand,
         "payment": {
