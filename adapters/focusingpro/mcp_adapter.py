@@ -216,15 +216,28 @@ class FocusingProMCPAdapter:
     async def find_inscription(self, inscription_code: str) -> Optional[Dict]:
         """Find student inscription by code. Returns first match or None."""
         result = await self.call_tool("inscription_query", {
+            "module": self.module,
             "params": {
                 "inscription_code": inscription_code,
                 "page_size": 1,
                 "page": 1,
             },
-            "module": self.module,
         })
-        records = result.get("records") or result.get("data") or result.get("items") or []
+        # MCP tool may return records directly or inside tableInfo wrapper
+        records = (
+            result.get("records")
+            or result.get("data")
+            or result.get("items")
+            or result.get("tableData", {}).get("records", [])
+            or []
+        )
         if not records:
+            # Also try matching by inscription_code in a list query
+            result2 = await self.call_tool("inscription_get", {
+                "params": {"inscription_code": inscription_code},
+            })
+            if result2 and not result2.get("error"):
+                return result2
             logger.warning("inscription_query: no record for code=%s", inscription_code)
             return None
         return records[0]
@@ -246,15 +259,15 @@ class FocusingProMCPAdapter:
         Returns the collect_pay_id for Step 3.
         """
         result = await self.call_tool("payment_register_online_receipt", {
+            "module": self.module,
             "params": {
                 "inscription_id": inscription_id,
                 "amount": amount,
                 "external_reference": transaction_id,
                 "paid_at": paid_at,
                 "payment_method": "Online",
-                "note": f"ClawShow auto-writeback via {gateway}",
+                "note": f"ClawShow:{transaction_id} via {gateway}",
             },
-            "module": self.module,
         })
 
         collect_pay_id = (
@@ -289,18 +302,28 @@ class FocusingProMCPAdapter:
     async def verify_payment_exists(self, transaction_id: str) -> bool:
         """
         Check if this transaction_id is already recorded in FocusingPro.
-        Conservative: returns False on error.
+
+        collect_pay_query does not support external_reference filter, so we
+        search by filtering the abstract field (FocusingPro stores the external
+        reference in the note/abstract). Conservative: returns False on error
+        so the writeback proceeds and FocusingPro handles natural deduplication.
         """
         try:
             result = await self.call_tool("collect_pay_query", {
                 "params": {
-                    "external_reference": transaction_id,
-                    "page_size": 1,
+                    "abstract": transaction_id,
+                    "page_size": 5,
                     "page": 1,
                 },
             })
             records = result.get("records") or result.get("data") or result.get("items") or []
-            exists = len(records) > 0
+            # Manual check: any record references this transaction_id?
+            exists = any(
+                transaction_id in str(r.get("abstract", ""))
+                or transaction_id in str(r.get("note", ""))
+                or transaction_id in str(r.get("external_reference", ""))
+                for r in records
+            )
             if exists:
                 logger.info("verify_payment_exists: %s already in FocusingPro", transaction_id)
             return exists
