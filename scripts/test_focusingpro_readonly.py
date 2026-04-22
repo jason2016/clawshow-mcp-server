@@ -55,17 +55,29 @@ async def run_tests(namespace: str):
         print(f"  Session ID: {fp._session_id}")
         print(f"  Module: {fp.module}")
 
-        # ── 1. inscription_query (ES) ──────────────────────────────────
-        _section("1. inscription_query — first 2 students")
+        # ── 1. inscription_query — language module (has data) ─────────
+        _section("1. inscription_query — language module (first 2)")
         try:
             result = await fp.call_tool("inscription_query", {
                 "params": {"page_size": 2, "page": 1},
-                "module": fp.module,
+                "module": "language",
             })
-            records = result.get("records") or result.get("data") or result.get("items") or []
-            _show("inscription_query", records)
+            records = result.get("items") or result.get("records") or result.get("data") or []
+            pagination = result.get("pagination") or {}
+            _show("inscription_query (language)", records)
+            print(f"  Total in language module: {pagination.get('total', '?')}")
             if records:
-                print(f"\n  ✅ OK — sample keys: {list(records[0].keys())[:8]}")
+                sample_code = records[0].get("code")
+                print(f"\n  ✅ OK — sample inscription code: {sample_code}")
+
+                # ── 1b. find_inscription (adapter method) ─────────────────
+                _section("1b. find_inscription — lookup by code (adapter method)")
+                if sample_code:
+                    found = await fp.find_inscription(sample_code)
+                    if found:
+                        print(f"  ✅ found: code={found.get('code')} keys={list(found.keys())}")
+                    else:
+                        print(f"  ❌ not found for code={sample_code}")
         except FocusingProMCPError as e:
             print(f"  ❌ FAILED: {e}")
 
