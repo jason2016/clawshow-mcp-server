@@ -1065,6 +1065,8 @@ button{cursor:pointer}
 #topActions{display:flex;gap:8px;position:relative;flex-shrink:0}
 #btnNextField{padding:6px 12px;background:#28a745;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;white-space:nowrap}
 #btnNextField.is-finish{background:#1976d2}
+@keyframes finish-pulse{0%,100%{box-shadow:0 0 0 0 rgba(25,118,210,.7)}60%{box-shadow:0 0 0 10px rgba(25,118,210,0)}}
+#btnNextField.is-finish{animation:finish-pulse 1.2s ease infinite}
 #btnMore{padding:6px 10px;background:#fff;border:1px solid #ccc;border-radius:6px;font-size:13px;color:#444}
 #moreMenu{position:absolute;right:0;top:calc(100% + 4px);background:#fff;border:1px solid #ddd;border-radius:8px;min-width:192px;box-shadow:0 4px 16px rgba(0,0,0,.14);z-index:200;overflow:hidden;display:none}
 #moreMenu a{display:block;padding:10px 16px;font-size:14px;color:#333;cursor:pointer;border-bottom:1px solid #f5f5f5}
