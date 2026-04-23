@@ -315,9 +315,29 @@ class FocusingProMCPAdapter:
 
     async def find_inscription(self, inscription_code: str) -> Optional[Dict]:
         """
-        Find student inscription by code via MCP HTTP+SSE.
-        Tries self.module first, then the other module.
+        Find student inscription by code via inscription_get MCP tool.
+        Falls back to inscription_query if inscription_get returns empty.
         """
+        # Primary: inscription_get (exact lookup by ID)
+        try:
+            result = await self.call_tool("inscription_get", {
+                "params": {"inscription_id": inscription_code},
+            })
+            record = result.get("item") or result.get("record") or result.get("data")
+            if not record and result.get("tableInfo"):
+                # Some responses embed the record fields at top level alongside tableInfo
+                # Check if MyRangeKey (or readable "code") is present
+                if result.get("code") or result.get("MyRangeKey"):
+                    record = result
+            if record:
+                code = record.get("code") or record.get("MyRangeKey", "")
+                if str(code) == str(inscription_code):
+                    logger.info("find_inscription: inscription_get found code=%s", inscription_code)
+                    return record
+        except FocusingProMCPError as exc:
+            logger.debug("find_inscription: inscription_get failed (%s), trying query", exc)
+
+        # Fallback: inscription_query with code filter + explicit match validation
         modules_to_try = [self.module]
         alt_module = "language" if self.module != "language" else "enseignement_superieur"
         modules_to_try.append(alt_module)
@@ -327,7 +347,7 @@ class FocusingProMCPAdapter:
                 "module": module,
                 "params": {
                     "inscription_code": inscription_code,
-                    "page_size": 1,
+                    "page_size": 10,
                     "page": 1,
                 },
             })
@@ -337,15 +357,13 @@ class FocusingProMCPAdapter:
                 or result.get("data")
                 or []
             )
-            # Verify the returned record actually matches the requested code
-            # (inscription_query filter may not work perfectly across modules)
             for item in items:
                 item_code = item.get("code") or item.get("MyRangeKey", "")
                 if str(item_code) == str(inscription_code):
                     logger.info("find_inscription: found code=%s in module=%s", inscription_code, module)
                     return item
 
-        logger.warning("inscription_query: no record for code=%s in any module", inscription_code)
+        logger.warning("find_inscription: no record for code=%s", inscription_code)
         return None
 
     # ------------------------------------------------------------------
