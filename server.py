@@ -1108,6 +1108,10 @@ button{cursor:pointer}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:300;display:flex;align-items:center;justify-content:center;padding:16px}
 .modal-box{background:#fff;border-radius:12px;max-width:480px;width:100%;padding:24px;box-shadow:0 8px 32px rgba(0,0,0,.18);max-height:92vh;overflow-y:auto}
 .modal-box h3{font-size:17px;margin-bottom:14px;color:#222}
+/* SIG SETUP PANEL — overrides modal-bg to be a non-blocking top panel */
+#sigModal{top:48px;bottom:auto;background:#fff;border-bottom:2px solid #e0e0e0;box-shadow:0 6px 20px rgba(0,0,0,.12);padding:0;align-items:flex-start}
+#sigModal .modal-box{max-width:900px;border-radius:0;box-shadow:none;padding:12px 24px 16px;max-height:none;width:100%}
+#sigInstr{font-size:13px;color:#555;background:#f0f4ff;border-radius:6px;padding:8px 12px;margin-bottom:10px;border-left:3px solid #1a1a2e}
 /* TABS */
 .mtabs{display:flex;border-bottom:2px solid #ebebeb;margin-bottom:14px}
 .mtab{padding:8px 14px;background:none;border:none;font-size:14px;color:#777;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px}
@@ -1206,9 +1210,10 @@ button{cursor:pointer}
 <div id="resultArea" style="display:none"></div>
 
 <!-- MODAL: SIGNATURE SETUP -->
-<div id="sigModal" class="modal-bg" style="display:none" onclick="bgClick(event,'sigModal')">
-  <div class="modal-box" onclick="event.stopPropagation()">
-    <h3 id="mSetupH3"></h3>
+<div id="sigModal" class="modal-bg" style="display:none">
+  <div class="modal-box">
+    <div id="sigInstr">&#9997;&#65039; <strong>&#201;tape 1</strong> — Configurez votre signature ci-dessous, puis cliquez <strong>Signer</strong> pour passer aux zones &#224; signer dans le document.</div>
+    <h3 id="mSetupH3" style="margin-bottom:8px"></h3>
     <div class="mtabs">
       <button class="mtab on" id="tabType" onclick="switchTab('type')"></button>
       <button class="mtab" id="tabDraw" onclick="switchTab('draw')"></button>
@@ -1390,7 +1395,7 @@ function zoneClick(page){
   }
 }
 
-/* ---- SETUP MODAL ---- */
+/* ---- SETUP PANEL ---- */
 function openSetup(){
   document.getElementById('legalCb').checked=false;
   chkBtn();
@@ -1398,14 +1403,19 @@ function openSetup(){
     document.getElementById('typeName').value=C.signer_name;
   drawTyped();
   document.getElementById('sigModal').style.display='flex';
-  // Re-measure canvas after modal is visible so getBoundingClientRect is accurate
   requestAnimationFrame(()=>{
     const cv=document.getElementById('drawCv');
     const oldStrokes=cv._strokes||[];
     szCv(cv);S.dCtx=cv.getContext('2d');cv._strokes=oldStrokes;
+    // Push appWrap down so document is visible below the panel
+    const h=document.getElementById('sigModal').offsetHeight;
+    document.getElementById('appWrap').style.paddingTop=(h+4)+'px';
   });
 }
-function closeSetup(){document.getElementById('sigModal').style.display='none';}
+function closeSetup(){
+  document.getElementById('sigModal').style.display='none';
+  document.getElementById('appWrap').style.paddingTop='58px';
+}
 function switchTab(t){
   ['type','draw','img'].forEach(x=>{
     const T='tab'+x[0].toUpperCase()+x.slice(1);
@@ -1443,7 +1453,10 @@ function confirmSetup(){
   if(S.sigTarget==='paraphe'){
     S.paraphes[S.sigPage]=dataURL;
     updateBar();renderZones();
-    setTimeout(()=>{if(S.sigPage<S.total)gotoPage(S.sigPage+1);},300);
+    setTimeout(()=>{if(S.sigPage<S.total)gotoPage(S.sigPage+1);else goNext();},300);
+  } else {
+    // Initial setup — scroll to first signature field
+    setTimeout(goNext,200);
   }
 }
 
@@ -1711,6 +1724,7 @@ function init(){
   drawTyped();
   gotoPage(1);
   updateBar();
+  openSetup();
 }
 window.addEventListener('DOMContentLoaded',init);
 window.addEventListener('resize',()=>{
