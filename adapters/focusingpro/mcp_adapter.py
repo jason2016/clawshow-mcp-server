@@ -337,9 +337,13 @@ class FocusingProMCPAdapter:
                 or result.get("data")
                 or []
             )
-            if items:
-                logger.info("find_inscription: found code=%s in module=%s", inscription_code, module)
-                return items[0]
+            # Verify the returned record actually matches the requested code
+            # (inscription_query filter may not work perfectly across modules)
+            for item in items:
+                item_code = item.get("code") or item.get("MyRangeKey", "")
+                if str(item_code) == str(inscription_code):
+                    logger.info("find_inscription: found code=%s in module=%s", inscription_code, module)
+                    return item
 
         logger.warning("inscription_query: no record for code=%s in any module", inscription_code)
         return None
