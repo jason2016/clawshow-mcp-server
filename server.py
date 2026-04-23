@@ -1082,6 +1082,10 @@ button{cursor:pointer}
 .sz{position:absolute;pointer-events:auto;transition:background .2s}
 .sz.pend{border:2px dashed #E6A817;background:rgba(230,168,23,.13);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2px}
 .sz.pend:hover{background:rgba(230,168,23,.23)}
+@keyframes zone-pulse{0%,100%{box-shadow:0 0 0 0 rgba(230,168,23,.8)}50%{box-shadow:0 0 0 12px rgba(230,168,23,0)}}
+.sz.pend.pulse{animation:zone-pulse .7s ease 3}
+@keyframes btn-flash{0%,100%{background:#1976d2}50%{background:#E6A817;transform:scale(1.05)}}
+.btn-pri.flash{animation:btn-flash .35s ease 3}
 .sz.pend .zh{font-size:10px;color:#c68000;font-weight:700;text-align:center;pointer-events:none;line-height:1.2}
 .sz.pend .zi{font-size:16px;pointer-events:none}
 .sz.done{border:none;background:transparent}
@@ -1349,8 +1353,28 @@ function updateBar(){
     btn.onclick=goNext;
   }
 }
+function flashZone(){
+  requestAnimationFrame(()=>{
+    const z=document.querySelector('.sz.pend');
+    if(!z)return;
+    z.scrollIntoView({behavior:'smooth',block:'center'});
+    z.classList.remove('pulse');
+    void z.offsetWidth;
+    z.classList.add('pulse');
+    setTimeout(()=>z.classList.remove('pulse'),2200);
+  });
+}
 function goNext(){
-  for(let p=1;p<=S.total;p++){if(!S.paraphes[p]){gotoPage(p);return;}}
+  if(!S.savedSig){
+    // No signature configured yet — flash the confirm button in the panel
+    const btn=document.getElementById('btnConfirm');
+    btn.classList.remove('flash');void btn.offsetWidth;btn.classList.add('flash');
+    setTimeout(()=>btn.classList.remove('flash'),1100);
+    document.getElementById('sigModal').scrollIntoView&&
+      document.getElementById('sigModal').scrollIntoView({behavior:'smooth',block:'start'});
+    return;
+  }
+  for(let p=1;p<=S.total;p++){if(!S.paraphes[p]){gotoPage(p);flashZone();return;}}
   if(S.cur!==S.total){gotoPage(S.total);return;}
   const fs=document.getElementById('finalSec');
   if(!S.ff.cb1){document.getElementById('cb1').focus();fs.scrollIntoView({behavior:'smooth',block:'start'});return;}
