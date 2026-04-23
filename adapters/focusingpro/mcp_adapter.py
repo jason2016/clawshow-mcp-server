@@ -323,17 +323,13 @@ class FocusingProMCPAdapter:
             result = await self.call_tool("inscription_get", {
                 "params": {"inscription_id": inscription_code},
             })
-            record = result.get("item") or result.get("record") or result.get("data")
-            if not record and result.get("tableInfo"):
-                # Some responses embed the record fields at top level alongside tableInfo
-                # Check if MyRangeKey (or readable "code") is present
-                if result.get("code") or result.get("MyRangeKey"):
-                    record = result
-            if record:
-                code = record.get("code") or record.get("MyRangeKey", "")
-                if str(code) == str(inscription_code):
+            # inscription_get returns {tableInfo, items: [...]} — same shape as query
+            items = result.get("items") or result.get("records") or result.get("data") or []
+            for item in items:
+                item_code = item.get("code") or item.get("MyRangeKey", "")
+                if str(item_code) == str(inscription_code):
                     logger.info("find_inscription: inscription_get found code=%s", inscription_code)
-                    return record
+                    return item
         except FocusingProMCPError as exc:
             logger.debug("find_inscription: inscription_get failed (%s), trying query", exc)
 
