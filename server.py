@@ -2200,6 +2200,21 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
     except Exception as e:
         return JSONResponse({"error": f"PDF signing failed: {e}"}, status_code=500)
 
+    # S3 archive — upload signed PDF (non-blocking, failure does not abort signing)
+    try:
+        from adapters.esign.s3_archive import upload_signed_pdf
+        with open(signed_pdf, "rb") as _f:
+            _pdf_bytes = _f.read()
+        _s3_info = upload_signed_pdf(
+            doc_id=doc_id,
+            signer_email=doc.get("signer_email", "unknown"),
+            pdf_bytes=_pdf_bytes,
+            doc_name=doc.get("doc_name", ""),
+        )
+        db.update_esign_s3_url(doc_id, _s3_info["s3_url"])
+    except Exception as _s3_err:
+        logger.error("S3 archive failed for %s: %s", doc_id, _s3_err)
+
     # Update signer record if token provided
     signer_id = None
     if token:
