@@ -1105,7 +1105,7 @@ button{cursor:pointer}
 .cbrow input[type=checkbox]{width:16px;height:16px;margin-top:2px;flex-shrink:0;cursor:pointer}
 .cbrow label{font-size:14px;color:#333;line-height:1.45;cursor:pointer}
 .cvwrap{border:1px solid #ddd;border-radius:6px;background:#fafafa;position:relative}
-.cvwrap canvas{display:block;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 21l5-2L20 7a2 2 0 00-3-3L5 16z' fill='%23333' stroke='%23fff' stroke-width='0.5'/><path d='M3 21l2-1-1-1z' fill='%23555'/></svg>") 3 21,crosshair}
+.cvwrap canvas{display:block;width:100%;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 21l5-2L20 7a2 2 0 00-3-3L5 16z' fill='%23333' stroke='%23fff' stroke-width='0.5'/><path d='M3 21l2-1-1-1z' fill='%23555'/></svg>") 3 21,crosshair}
 .cv-clr{position:absolute;top:5px;right:8px;border:none;background:transparent;font-size:12px;color:#999;padding:2px 6px}
 .use-saved-btn{margin-top:6px;padding:5px 10px;border:1px solid #1976d2;background:#e3f2fd;color:#1976d2;border-radius:5px;font-size:12px}
 /* MODALS */
@@ -1566,10 +1566,13 @@ function onFF(){
 
 /* ---- DRAW UTILITY ---- */
 function szCv(cv){
+  // Always measure parent to avoid circular dependency (canvas CSS width = its pixel width when no CSS width set)
+  const par=cv.parentElement;
+  const pr=par?par.getBoundingClientRect():null;
   const r=cv.getBoundingClientRect();
-  const w=r.width||(cv.parentElement?cv.parentElement.offsetWidth:320)||320;
+  const w=(pr&&pr.width>0?pr.width:0)||(r.width>0?r.width:0)||(par?par.offsetWidth:0)||320;
   const h=parseInt(cv.getAttribute('height')||cv.height||90);
-  cv.width=w;cv.height=h;
+  cv.width=Math.round(w);cv.height=h;
 }
 function attachDraw(cv,ctx,onDraw,getColor){
   let drawing=false,lx=0,ly=0,mx=0,my=0;
