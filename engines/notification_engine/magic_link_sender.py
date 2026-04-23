@@ -256,6 +256,127 @@ class MagicLinkSender:
         return ok
 
 
+    def send_payment_confirmed(
+        self,
+        plan_id: str,
+        installment_no: int,
+        namespace: str,
+        paid_at: Optional[str] = None,
+        transaction_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Send payment confirmation email after successful charge.
+
+        Called by Mollie webhook handler after installment status → charged.
+        Non-fatal: caller should catch exceptions.
+        """
+        from storage.billing_db import BillingDB
+        from core.namespace_config import load_namespace_config
+
+        db = BillingDB()
+        plan = db.get_plan(plan_id, namespace)
+        if not plan:
+            logger.error("send_payment_confirmed: plan not found %s/%s", namespace, plan_id)
+            return False
+
+        customer_email = plan.get("customer_email", "")
+        if not customer_email:
+            logger.error("send_payment_confirmed: no email on plan %s", plan_id)
+            return False
+
+        ns_config = load_namespace_config(namespace)
+        from_email, from_name = self._get_from_email(ns_config)
+        primary_color = ns_config.brand.primary_color or "#6366F1"
+
+        # Amount
+        installments_list = db.get_installments(plan_id)
+        target = next(
+            (i for i in installments_list if i["installment_number"] == installment_no),
+            installments_list[0] if installments_list else None,
+        )
+        amount = float(target["amount"]) if target else float(plan.get("total_amount", 0))
+        currency = plan.get("currency", "EUR")
+        total_installments = plan.get("installments", 1)
+        total_str = str(total_installments) if total_installments > 0 else "∞"
+
+        # Paid at date
+        if paid_at:
+            paid_at_str = _format_date_fr(paid_at[:10])
+        else:
+            paid_at_str = _format_date_fr(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
+        # Transaction ref (readable)
+        txn_ref = transaction_id or f"#{plan_id[:8]}-{installment_no:02d}"
+
+        # Completion vs next due block
+        is_complete = (total_installments > 0 and installment_no >= total_installments)
+        if is_complete:
+            next_block = (
+                '<tr><td style="padding:0 32px 24px 32px;">'
+                '<div style="background:#fef3c7;border-left:4px solid #f59e0b;'
+                'padding:16px;border-radius:4px;">'
+                '<p style="margin:0;color:#92400e;font-size:15px;font-weight:600;">'
+                '🎉 Tous les paiements sont effectués</p>'
+                f'<p style="margin:8px 0 0 0;color:#92400e;font-size:14px;">'
+                f'Merci pour votre confiance envers {ns_config.brand.name}.</p>'
+                '</div></td></tr>'
+            )
+        else:
+            next_installment = next(
+                (i for i in installments_list if i["installment_number"] == installment_no + 1),
+                None,
+            )
+            next_due = ""
+            if next_installment and next_installment.get("scheduled_date"):
+                next_due = _format_date_fr(next_installment["scheduled_date"])
+            next_block = (
+                '<tr><td style="padding:0 32px 24px 32px;">'
+                '<div style="background:#eff6ff;border-left:4px solid #3b82f6;'
+                'padding:16px;border-radius:4px;">'
+                '<p style="margin:0;color:#1e40af;font-size:15px;">'
+                f'<strong>Prochaine échéance :</strong> {next_due or "à venir"}</p>'
+                '<p style="margin:8px 0 0 0;color:#1e40af;font-size:14px;">'
+                'Vous recevrez un email de rappel.</p>'
+                '</div></td></tr>'
+            ) if not is_complete else ""
+
+        # Support block
+        support_email = getattr(ns_config.brand, "support_email", None) or ""
+        support_block = ""
+        if support_email:
+            support_block = (
+                '<tr><td style="padding:0 32px 16px 32px;text-align:center;">'
+                f'<p style="margin:0;font-size:13px;color:#9ca3af;">'
+                f'Une question ? <a href="mailto:{support_email}" '
+                f'style="color:{primary_color};text-decoration:none;">{support_email}</a></p>'
+                '</td></tr>'
+            )
+
+        html = _render_template("payment_confirmed.html", {
+            "brand_name": ns_config.brand.name or namespace,
+            "primary_color": primary_color,
+            "customer_name": plan.get("customer_name", ""),
+            "amount_formatted": _format_amount(amount, currency),
+            "installment_no": installment_no,
+            "total_installments": total_str,
+            "paid_at": paid_at_str,
+            "transaction_ref": txn_ref,
+            "next_block": next_block,
+            "support_block": support_block,
+        })
+
+        ok = self._send_email(
+            to=customer_email,
+            from_email=from_email,
+            from_name=from_name,
+            subject=f"{ns_config.brand.name} – Paiement reçu ✓",
+            html=html,
+        )
+        logger.info("send_payment_confirmed: plan=%s inst=%d to=%s ok=%s",
+                    plan_id, installment_no, customer_email, ok)
+        return ok
+
+
 # Module-level singleton
 _sender = MagicLinkSender()
 

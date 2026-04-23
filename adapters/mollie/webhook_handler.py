@@ -117,17 +117,30 @@ async def _handle_payment_page_payment(
             "commission_amount": commission_amount,
         })
 
-        # FocusingPro writeback (non-fatal — only for namespaces that have FP token)
-        if installment:
-            plan = db.get_plan(plan_id, namespace)
-            if plan and plan.get("external_order_id"):
-                await _writeback_to_focusingpro(
-                    db=db,
-                    plan=plan,
-                    installment=installment,
-                    payment_id=payment_id,
-                    paid_at=now,
+        # FocusingPro writeback (non-fatal)
+        plan = db.get_plan(plan_id, namespace)
+        if installment and plan and plan.get("external_order_id"):
+            await _writeback_to_focusingpro(
+                db=db,
+                plan=plan,
+                installment=installment,
+                payment_id=payment_id,
+                paid_at=now,
+            )
+
+        # Payment confirmation email (non-fatal)
+        if installment and plan:
+            try:
+                from engines.notification_engine.magic_link_sender import MagicLinkSender
+                MagicLinkSender().send_payment_confirmed(
+                    plan_id=plan_id,
+                    installment_no=installment.get("installment_number", 1),
+                    namespace=namespace,
+                    paid_at=now[:10],
+                    transaction_id=payment_id,
                 )
+            except Exception as _e:
+                logger.error("send_payment_confirmed failed (non-fatal): %s", _e)
 
         return {"success": True, "action_taken": "payment_page_paid", "plan_id": plan_id}
 
