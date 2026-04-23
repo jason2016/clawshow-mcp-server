@@ -1572,21 +1572,36 @@ function szCv(cv){
   cv.width=w;cv.height=h;
 }
 function attachDraw(cv,ctx,onDraw,getColor){
-  let drawing=false,lx=0,ly=0;
+  let drawing=false,lx=0,ly=0,mx=0,my=0;
   cv._strokes=[];
+  function getCtx(){return cv.getContext('2d');}
   function pos(e){
     const r=cv.getBoundingClientRect(),s=e.touches?e.touches[0]:e;
-    const scaleX=cv.width/r.width,scaleY=cv.height/r.height;
+    // Guard: if canvas pixel width doesn't match display, use 1:1 scale
+    const scaleX=r.width>0?cv.width/r.width:1,scaleY=r.height>0?cv.height/r.height:1;
     return[(s.clientX-r.left)*scaleX,(s.clientY-r.top)*scaleY];
   }
-  function dn(e){e.preventDefault();[lx,ly]=pos(e);drawing=true;cv._strokes.push({color:getColor(),pts:[[lx,ly]]});}
+  function dn(e){
+    e.preventDefault();
+    // Auto-correct canvas pixel width on every stroke start
+    const r=cv.getBoundingClientRect();
+    if(r.width>0&&Math.abs(cv.width-r.width)>1){cv.width=Math.round(r.width);}
+    [lx,ly]=pos(e);[mx,my]=[lx,ly];
+    drawing=true;
+    cv._strokes.push({color:getColor(),pts:[[lx,ly]]});
+  }
   function mv(e){
     if(!drawing)return;e.preventDefault();
     const[x,y]=pos(e);
-    ctx.beginPath();ctx.moveTo(lx,ly);ctx.quadraticCurveTo(lx,ly,(lx+x)/2,(ly+y)/2);
-    ctx.strokeStyle=getColor();ctx.lineWidth=2;ctx.lineCap='round';ctx.stroke();
+    const c=getCtx();
+    const nx=(lx+x)/2,ny=(ly+y)/2;
+    c.beginPath();c.moveTo(mx,my);
+    c.quadraticCurveTo(lx,ly,nx,ny);
+    c.strokeStyle=getColor();c.lineWidth=2.5;c.lineCap='round';c.lineJoin='round';
+    c.stroke();
+    mx=nx;my=ny;[lx,ly]=[x,y];
     if(cv._strokes.length)cv._strokes[cv._strokes.length-1].pts.push([x,y]);
-    [lx,ly]=[x,y];if(onDraw)onDraw();
+    if(onDraw)onDraw();
   }
   function up(){drawing=false;}
   cv.addEventListener('mousedown',dn);
@@ -1599,13 +1614,15 @@ function undoDraw(){
   const cv=document.getElementById('drawCv');
   if(!cv._strokes||!cv._strokes.length)return;
   cv._strokes.pop();
-  const ctx=S.dCtx;ctx.clearRect(0,0,cv.width,cv.height);
+  const ctx=cv.getContext('2d');ctx.clearRect(0,0,cv.width,cv.height);
   cv._strokes.forEach(stroke=>{
     if(stroke.pts.length<2)return;
-    ctx.strokeStyle=stroke.color;ctx.lineWidth=2;ctx.lineCap='round';
+    ctx.strokeStyle=stroke.color;ctx.lineWidth=2.5;ctx.lineCap='round';ctx.lineJoin='round';
+    let[lx,ly]=stroke.pts[0],[pmx,pmy]=[lx,ly];
     for(let i=1;i<stroke.pts.length;i++){
-      const[lx,ly]=stroke.pts[i-1],[x,y]=stroke.pts[i];
-      ctx.beginPath();ctx.moveTo(lx,ly);ctx.quadraticCurveTo(lx,ly,(lx+x)/2,(ly+y)/2);ctx.stroke();
+      const[x,y]=stroke.pts[i],nx=(lx+x)/2,ny=(ly+y)/2;
+      ctx.beginPath();ctx.moveTo(pmx,pmy);ctx.quadraticCurveTo(lx,ly,nx,ny);ctx.stroke();
+      pmx=nx;pmy=ny;[lx,ly]=[x,y];
     }
   });
   S.drawHas=cv._strokes.length>0;chkBtn();
