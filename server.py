@@ -1552,8 +1552,9 @@ function attachDraw(cv,ctx,onDraw,getColor){
     [lx,ly]=[x,y];if(onDraw)onDraw();
   }
   function up(){drawing=false;}
-  cv.addEventListener('mousedown',dn);cv.addEventListener('mousemove',mv);
-  cv.addEventListener('mouseup',up);cv.addEventListener('mouseleave',up);
+  cv.addEventListener('mousedown',dn);
+  document.addEventListener('mousemove',mv);
+  document.addEventListener('mouseup',up);
   cv.addEventListener('touchstart',dn,{passive:false});cv.addEventListener('touchmove',mv,{passive:false});
   cv.addEventListener('touchend',up);
 }
