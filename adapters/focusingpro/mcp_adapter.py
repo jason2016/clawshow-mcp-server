@@ -386,13 +386,25 @@ class FocusingProMCPAdapter:
             inscription.get("code")
             or inscription.get("MyRangeKey")
         )
-        programme_price = inscription.get("prix_du_programme") or inscription.get("b330bb0c7646418ab1cef17a3d7e8f50", "")
-        futu_id = inscription.get("futu_show_id") or inscription.get("f54c22f765ea4731b39b8dcc6b52ad56", "")
-        ecole = inscription.get("ecole") or inscription.get("29cfad6750384b629042a650dd895449", "")
-        hash_code = inscription.get("hash_code") or inscription.get("33aaec1e0358450eba9bf8c0e700ec1f", "")
-
-        # Reference order = hash_code + _ + inscription_code
-        reference_order = f"{hash_code}_{inscription_code}" if hash_code else inscription_code
+        # Readable field names from inscription_get response
+        programme_price = (
+            inscription.get("programme_price")          # readable
+            or inscription.get("b330bb0c7646418ab1cef17a3d7e8f50", "")  # GUID fallback
+        )
+        futu_id = (
+            inscription.get("futu_id")                  # readable
+            or inscription.get("f54c22f765ea4731b39b8dcc6b52ad56", "")
+        )
+        ecole = (
+            inscription.get("school")                   # readable
+            or inscription.get("29cfad6750384b629042a650dd895449", "")
+        )
+        # hash_code from inscription IS the full reference_order (e.g. "47f13ed21275d3b9_CDUEG...")
+        reference_order = (
+            inscription.get("hash_code")                # already full reference_order
+            or inscription.get("33aaec1e0358450eba9bf8c0e700ec1f", "")
+            or inscription_code
+        )
 
         abstract = (
             f"Inscription: {inscription_code};"
