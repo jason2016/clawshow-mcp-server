@@ -280,13 +280,8 @@ def _embed_signature_in_pdf(
 def _send_signing_email(signer_name: str, signer_email: str, signing_url: str,
                          doc_id: str, language: str) -> None:
     try:
-        host = os.getenv("SMTP_HOST", "")
-        port = int(os.getenv("SMTP_PORT", "465"))
-        user = os.getenv("SMTP_USER", "")
-        pwd = os.getenv("SMTP_PASS", "")
-        if not host or not user:
+        if not signer_email:
             return
-
         labels = {
             "fr": ("Document a signer", "Bonjour", "Vous avez recu un document a signer.", "Signer le document"),
             "en": ("Document to sign", "Hello", "You have received a document to sign.", "Sign document"),
@@ -312,18 +307,7 @@ def _send_signing_email(signer_name: str, signer_email: str, signing_url: str,
           </div>
         </div>
         """
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = f"ClawShow eSign <{user}>"
-        msg["To"] = signer_email
-        msg.attach(MIMEText(html, "html", "utf-8"))
-
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
-            srv.login(user, pwd)
-            srv.send_message(msg)
+        _send_html_email(signer_email, subject, html)
     except Exception:
         pass  # Email failure must not break the tool
 
@@ -573,11 +557,7 @@ def _send_school_notification_email(
 ) -> None:
     """Email school admin when student has signed asking for counter-signature."""
     try:
-        host = os.getenv("SMTP_HOST", "")
-        port = int(os.getenv("SMTP_PORT", "465"))
-        user = os.getenv("SMTP_USER", "")
-        pwd = os.getenv("SMTP_PASS", "")
-        if not host or not user or not school_email:
+        if not school_email:
             return
         subject = f"[ClawShow eSign] Convention signee par {student_name} — a contresigner"
         html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
@@ -597,8 +577,7 @@ def _send_school_notification_email(
             <p style="font-size:12px;color:#999">Document ID: {doc_id}</p>
           </div>
         </div>"""
-        _send_html_email(user, pwd, host, port, school_email,
-                         f"ClawShow eSign <{user}>", subject, html)
+        _send_html_email(school_email, subject, html)
     except Exception:
         pass
 
@@ -608,11 +587,7 @@ def _send_completion_email(
 ) -> None:
     """Email both parties when document is fully signed."""
     try:
-        host = os.getenv("SMTP_HOST", "")
-        port = int(os.getenv("SMTP_PORT", "465"))
-        user = os.getenv("SMTP_USER", "")
-        pwd = os.getenv("SMTP_PASS", "")
-        if not host or not user or not recipient_email:
+        if not recipient_email:
             return
         subject = "[ClawShow eSign] Document signe par toutes les parties"
         html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
@@ -631,8 +606,7 @@ def _send_completion_email(
             <p style="font-size:12px;color:#999">Document ID: {doc_id}</p>
           </div>
         </div>"""
-        _send_html_email(user, pwd, host, port, recipient_email,
-                         f"ClawShow eSign <{user}>", subject, html)
+        _send_html_email(recipient_email, subject, html)
     except Exception:
         pass
 
@@ -641,11 +615,7 @@ def _send_expiration_email(recipient_name: str, recipient_email: str,
                             doc_id: str, lang: str = "fr") -> None:
     """Email signers when a document has expired."""
     try:
-        host = os.getenv("SMTP_HOST", "")
-        port = int(os.getenv("SMTP_PORT", "465"))
-        user = os.getenv("SMTP_USER", "")
-        pwd = os.getenv("SMTP_PASS", "")
-        if not host or not user or not recipient_email:
+        if not recipient_email:
             return
         subject = "[ClawShow eSign] Document expire" if lang == "fr" else "[ClawShow eSign] Document expired"
         body = (
@@ -659,8 +629,7 @@ def _send_expiration_email(recipient_name: str, recipient_email: str,
           </div>
           <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">{body}</div>
         </div>"""
-        _send_html_email(user, pwd, host, port, recipient_email,
-                         f"ClawShow eSign <{user}>", subject, html)
+        _send_html_email(recipient_email, subject, html)
     except Exception:
         pass
 
@@ -668,11 +637,7 @@ def _send_expiration_email(recipient_name: str, recipient_email: str,
 def _send_otp_email(signer_name: str, signer_email: str, code: str) -> None:
     """Send OTP verification code email."""
     try:
-        host = os.getenv("SMTP_HOST", "")
-        port = int(os.getenv("SMTP_PORT", "465"))
-        user = os.getenv("SMTP_USER", "")
-        pwd = os.getenv("SMTP_PASS", "")
-        if not host or not user or not signer_email:
+        if not signer_email:
             return
         subject = f"[ClawShow eSign] Votre code de verification : {code}"
         html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
@@ -692,26 +657,15 @@ def _send_otp_email(signer_name: str, signer_email: str, code: str) -> None:
             <p style="font-size:11px;color:#aaa;text-align:center">ClawShow eSign — Signature Electronique Avancee (AES)</p>
           </div>
         </div>"""
-        _send_html_email(user, pwd, host, port, signer_email,
-                         f"ClawShow eSign <{user}>", subject, html)
+        _send_html_email(signer_email, subject, html)
     except Exception:
         pass
 
 
-def _send_html_email(user: str, pwd: str, host: str, port: int,
-                      to: str, from_: str, subject: str, html: str) -> None:
-    """Internal helper to send an HTML email via SMTP_SSL."""
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = from_
-    msg["To"] = to
-    msg.attach(MIMEText(html, "html", "utf-8"))
-    ctx = ssl.create_default_context()
-    with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
-        srv.login(user, pwd)
-        srv.send_message(msg)
+def _send_html_email(to: str, subject: str, html: str) -> None:
+    """Send HTML email via Resend API (ClawShow eSign <esign@clawshow.ai>)."""
+    from adapters.esign.mailer import send_html
+    send_html(to, subject, html)
 
 
 # ---------------------------------------------------------------------------
