@@ -2313,6 +2313,19 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
 
     signed_pdf_url = f"{MCP_BASE_URL}/esign/{doc_id}/signed.pdf"
 
+    # Send completion email to signer
+    try:
+        from tools.esign import _send_completion_email
+        _send_completion_email(
+            recipient_name=doc.get("signer_name", ""),
+            recipient_email=doc.get("signer_email", ""),
+            doc_id=doc_id,
+            signed_pdf_url=signed_pdf_url,
+        )
+        logger.info("Completion email sent: doc_id=%s to=%s", doc_id, doc.get("signer_email", ""))
+    except Exception as _mail_err:
+        logger.error("Completion email failed: doc_id=%s error=%s", doc_id, _mail_err)
+
     # Resolve effective callback URL: per-doc > namespace-level
     callback_url = doc.get("callback_url", "")
     if not callback_url:
