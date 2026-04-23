@@ -1244,6 +1244,24 @@ button{cursor:pointer}
   </div>
 </div>
 
+<!-- MODAL: OTP VERIFICATION -->
+<div id="otpModal" class="modal-bg" style="display:none" onclick="bgClick(event,'otpModal')">
+  <div class="modal-box" onclick="event.stopPropagation()">
+    <h3 style="margin:0 0 12px">&#x1F512; V\u00e9rification d&apos;identit\u00e9</h3>
+    <p style="font-size:14px;color:#555;margin:0 0 16px">Un code \u00e0 6 chiffres a \u00e9t\u00e9 envoy\u00e9 \u00e0 votre adresse email.</p>
+    <input type="text" id="otpInput" maxlength="6" placeholder="000000"
+      style="width:100%;box-sizing:border-box;font-size:28px;text-align:center;letter-spacing:10px;
+             padding:12px;border:2px solid #ccc;border-radius:8px;font-family:monospace;margin-bottom:12px"
+      oninput="this.value=this.value.replace(/\D/g,'')"/>
+    <p id="otpError" style="color:#c00;font-size:13px;min-height:18px;margin:0 0 12px"></p>
+    <div class="btn-row">
+      <button class="btn-sec" onclick="closeModal('otpModal')" id="otpCancel">Annuler</button>
+      <button class="btn-sec" onclick="resendOTP()" id="otpResend" style="color:#2a5298">Renvoyer</button>
+      <button class="btn-pri" onclick="verifyOTP()" id="otpVerifyBtn">V\u00e9rifier</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: FINISH CONFIRM -->
 <div id="finishModal" class="modal-bg" style="display:none" onclick="bgClick(event,'finishModal')">
   <div class="modal-box" onclick="event.stopPropagation()">
@@ -1559,8 +1577,42 @@ function doDecline(){
   fetch('/esign/'+C.doc_id+'/decline'+(C.token?'?token='+C.token:''),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason,token:C.token})}).catch(()=>{});
 }
 
+/* ---- OTP ---- */
+let _otpVerified=false;
+function openFinish(){
+  if(_otpVerified){_showFinishModal();return;}
+  sendOTP();
+}
+function sendOTP(){
+  document.getElementById('otpError').textContent='';
+  document.getElementById('otpInput').value='';
+  fetch('/esign/'+C.doc_id+'/otp/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:C.token})})
+    .then(r=>r.json()).then(d=>{
+      if(d.status==='sent'){document.getElementById('otpModal').style.display='flex';document.getElementById('otpInput').focus();}
+      else{alert('Erreur envoi code: '+(d.error||'?'));}
+    }).catch(()=>alert('Erreur r\u00e9seau'));
+}
+function resendOTP(){
+  document.getElementById('otpError').textContent='';
+  document.getElementById('otpInput').value='';
+  document.getElementById('otpResend').disabled=true;
+  fetch('/esign/'+C.doc_id+'/otp/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:C.token})})
+    .then(()=>{setTimeout(()=>{document.getElementById('otpResend').disabled=false;},30000);})
+    .catch(()=>{document.getElementById('otpResend').disabled=false;});
+}
+function verifyOTP(){
+  const code=document.getElementById('otpInput').value.trim();
+  if(code.length!==6){document.getElementById('otpError').textContent='Entrez un code \u00e0 6 chiffres';return;}
+  document.getElementById('otpVerifyBtn').disabled=true;
+  fetch('/esign/'+C.doc_id+'/otp/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:C.token,otp:code})})
+    .then(r=>r.json()).then(d=>{
+      document.getElementById('otpVerifyBtn').disabled=false;
+      if(d.verified){_otpVerified=true;closeModal('otpModal');_showFinishModal();}
+      else{document.getElementById('otpError').textContent=d.error||'Code invalide';}
+    }).catch(()=>{document.getElementById('otpVerifyBtn').disabled=false;document.getElementById('otpError').textContent='Erreur r\u00e9seau';});
+}
+function _showFinishModal(){document.getElementById('finCb').checked=false;document.getElementById('btnDoFin').disabled=true;document.getElementById('finishModal').style.display='flex';}
 /* ---- FINISH ---- */
-function openFinish(){document.getElementById('finCb').checked=false;document.getElementById('btnDoFin').disabled=true;document.getElementById('finishModal').style.display='flex';}
 function doFinish(){
   closeModal('finishModal');
   const paraphes={};Object.entries(S.paraphes).forEach(([k,v])=>{paraphes[k]=v;});
@@ -1773,6 +1825,8 @@ def _render_signing_page(doc: dict, token: str = "") -> str:
 # ---------------------------------------------------------------------------
 # eSign V2 — HTTP handlers (REST endpoints, not MCP tools)
 # ---------------------------------------------------------------------------
+
+from adapters.esign.otp_handler import esign_otp_send, esign_otp_verify
 
 async def esign_page_image(request: Request):
     """GET /esign/{document_id}/page/{page_num}.png — serve a PDF page as PNG."""
@@ -2092,6 +2146,15 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
     lu_data_url = body.get("lu_approuve_png", "")
     city = body.get("city", "Paris") or "Paris"
     paraphes_raw = body.get("paraphes", {})  # {page_num_str: dataURL}
+
+    # OTP gate: signer must have verified OTP before submitting
+    if token:
+        signer_for_otp = db.get_signer_by_token(token)
+        if signer_for_otp and not db.is_otp_verified(doc_id, signer_for_otp["id"]):
+            return JSONResponse(
+                {"error": "OTP verification required before signing."},
+                status_code=403,
+            )
 
     if not sig_data_url or not sig_data_url.startswith("data:image/png;base64,"):
         return JSONResponse({"error": "Missing or invalid signature_png"}, status_code=400)
@@ -2959,6 +3022,8 @@ def _build_app() -> Starlette:
             Route("/esign-documents/recent", esign_documents_recent, methods=["GET"]),
             Route("/esign/create", esign_create, methods=["POST"]),
             Route("/esign/{document_id}/page/{page_num}.png", esign_page_image, methods=["GET"]),
+            Route("/esign/{document_id}/otp/send", esign_otp_send, methods=["POST"]),
+            Route("/esign/{document_id}/otp/verify", esign_otp_verify, methods=["POST"]),
             Route("/esign/{document_id}/sign", esign_submit_signature, methods=["POST"]),
             Route("/esign/{document_id}/decline", esign_decline, methods=["POST"]),
             Route("/esign/{document_id}/status", esign_status, methods=["GET"]),
