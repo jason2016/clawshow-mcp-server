@@ -1191,7 +1191,7 @@ button{cursor:pointer}
       <div class="ff"><label id="cityLbl"></label><input type="text" id="cityInp" oninput="onFF()"/></div>
       <div class="ff">
         <label id="luLbl"></label>
-        <div class="cvwrap"><canvas id="luCv" height="60"></canvas><button class="cv-clr" id="luClrBtn" onclick="clrLu()"></button></div>
+        <div class="cvwrap"><canvas id="luCv" height="80"></canvas><button class="cv-clr" id="luClrBtn" onclick="clrLu()"></button></div>
       </div>
       <div class="ff">
         <label id="sigLbl"></label>
@@ -1531,7 +1531,7 @@ function onFF(){
 function szCv(cv){
   const r=cv.getBoundingClientRect();
   const w=r.width||(cv.parentElement?cv.parentElement.offsetWidth:320)||320;
-  const h=cv.height||90;
+  const h=parseInt(cv.getAttribute('height')||cv.height||90);
   cv.width=w;cv.height=h;
 }
 function attachDraw(cv,ctx,onDraw,getColor){
