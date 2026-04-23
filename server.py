@@ -1398,6 +1398,12 @@ function openSetup(){
     document.getElementById('typeName').value=C.signer_name;
   drawTyped();
   document.getElementById('sigModal').style.display='flex';
+  // Re-measure canvas after modal is visible so getBoundingClientRect is accurate
+  requestAnimationFrame(()=>{
+    const cv=document.getElementById('drawCv');
+    const oldStrokes=cv._strokes||[];
+    szCv(cv);S.dCtx=cv.getContext('2d');cv._strokes=oldStrokes;
+  });
 }
 function closeSetup(){document.getElementById('sigModal').style.display='none';}
 function switchTab(t){
@@ -1522,11 +1528,20 @@ function onFF(){
 }
 
 /* ---- DRAW UTILITY ---- */
-function szCv(cv){const w=(cv.parentElement?cv.parentElement.offsetWidth:320)||320;const h=cv.height||90;cv.width=w;cv.height=h;}
+function szCv(cv){
+  const r=cv.getBoundingClientRect();
+  const w=r.width||(cv.parentElement?cv.parentElement.offsetWidth:320)||320;
+  const h=cv.height||90;
+  cv.width=w;cv.height=h;
+}
 function attachDraw(cv,ctx,onDraw,getColor){
   let drawing=false,lx=0,ly=0;
   cv._strokes=[];
-  function pos(e){const r=cv.getBoundingClientRect(),s=e.touches?e.touches[0]:e;return[s.clientX-r.left,s.clientY-r.top];}
+  function pos(e){
+    const r=cv.getBoundingClientRect(),s=e.touches?e.touches[0]:e;
+    const scaleX=cv.width/r.width,scaleY=cv.height/r.height;
+    return[(s.clientX-r.left)*scaleX,(s.clientY-r.top)*scaleY];
+  }
   function dn(e){e.preventDefault();[lx,ly]=pos(e);drawing=true;cv._strokes.push({color:getColor(),pts:[[lx,ly]]});}
   function mv(e){
     if(!drawing)return;e.preventDefault();
