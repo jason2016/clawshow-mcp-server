@@ -2256,21 +2256,43 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Source PDF not found"}, status_code=500)
 
     signed_pdf = str(ESIGN_DATA_DIR / namespace / f"{doc_id}-signed.pdf")
+    original_html = doc.get("rendered_html_path", "")
     try:
-        from tools.esign import _overlay_signatures_pdf
-        _overlay_signatures_pdf(
-            original_pdf,
-            signed_pdf,
-            paraphes=paraphes_bytes,
-            final_sig={
-                "sig_bytes": sig_bytes,
-                "lu_bytes": lu_bytes,
-                "city": city,
-                "signer_name": doc["signer_name"],
-                "signed_at": signed_at,
-                "signer_ip": signer_ip,
-            },
-        )
+        if original_html and Path(original_html).exists():
+            # Template-based: re-render HTML with placeholders replaced → correct positions + city/date
+            from tools.esign import _embed_signature_in_pdf
+            _embed_signature_in_pdf(
+                rendered_html_path=original_html,
+                signed_pdf=signed_pdf,
+                signature_png_bytes=sig_bytes,
+                signer_name=doc["signer_name"],
+                signed_at=signed_at,
+                signer_ip=signer_ip,
+                lu_approuve_png_bytes=lu_bytes,
+                city=city,
+            )
+            # Overlay per-page paraphes on top of the re-rendered PDF
+            if paraphes_bytes:
+                import shutil as _shutil
+                from tools.esign import _overlay_signatures_pdf
+                _tmp = signed_pdf + ".tmp.pdf"
+                _overlay_signatures_pdf(signed_pdf, _tmp, paraphes=paraphes_bytes, final_sig={})
+                _shutil.move(_tmp, signed_pdf)
+        else:
+            # Uploaded PDF: coordinate-based overlay
+            from tools.esign import _overlay_signatures_pdf
+            _overlay_signatures_pdf(
+                original_pdf, signed_pdf,
+                paraphes=paraphes_bytes,
+                final_sig={
+                    "sig_bytes": sig_bytes,
+                    "lu_bytes": lu_bytes,
+                    "city": city,
+                    "signer_name": doc["signer_name"],
+                    "signed_at": signed_at,
+                    "signer_ip": signer_ip,
+                },
+            )
     except Exception as e:
         return JSONResponse({"error": f"PDF signing failed: {e}"}, status_code=500)
 
