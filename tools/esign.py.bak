@@ -135,15 +135,15 @@ p {{ line-height: 1.6; }}
 <h1>{title}</h1>
 {body_html}
 <div class="sig-block">
-  <p>Fait à : <span id="city-placeholder">___________________</span></p>
+  <p>Fait a : <span id="city-placeholder">___________________</span></p>
   <p>Le : <span id="date-placeholder">___________________</span></p>
-  <p>Mention manuscrite lu et approuvé :</p>
+  <p>Mention manuscrite lu et approuve :</p>
   <div id="lu-approuve-placeholder" style="height:50px;border-bottom:1px solid #000;width:260px;"></div>
   <p style="margin-top:16px;">Signature de {signer_name} :</p>
   <div id="signature-placeholder" style="height:80px;border-bottom:1px solid #000;width:260px;"></div>
 </div>
 <div style="margin-top:30px;font-size:9pt;color:#999;text-align:center;border-top:1px solid #eee;padding-top:8px;">
-  Document ID : {doc_id} | Signé électroniquement via ClawShow eSign | mcp.clawshow.ai
+  Document ID : {doc_id} | Signe electroniquement via ClawShow eSign | mcp.clawshow.ai
 </div>
 </body></html>"""
 
@@ -219,15 +219,7 @@ def _embed_signature_in_pdf(
 
     try:
         dt = datetime.fromisoformat(signed_at.replace("Z", "+00:00"))
-        from zoneinfo import ZoneInfo as _ZI
-        _paris = dt.astimezone(_ZI("Europe/Paris"))
-        _utc = dt.astimezone(__import__("datetime").timezone.utc)
-        _tz = _paris.strftime("%Z")
-        date_str = (
-            f"{_paris.strftime('%d/%m/%Y')} à "
-            f"{_paris.strftime('%H:%M')} {_tz} "
-            f"({_utc.strftime('%H:%M')} UTC)"
-        )
+        date_str = dt.strftime("%d/%m/%Y a %H:%M UTC")
     except Exception:
         date_str = signed_at[:10]
 
@@ -251,8 +243,8 @@ def _embed_signature_in_pdf(
         html = re.sub(
             r'<div id="lu-approuve-placeholder"[^>]*>.*?</div>',
             (
-                '<div id="lu-approuve-placeholder" style="width:260px;height:50px;border-bottom:1px solid #000;display:flex;align-items:flex-end;">'
-                f'<img src="data:image/png;base64,{lu_b64}" style="max-width:260px;max-height:46px;object-fit:contain;object-position:bottom;display:block;"/></div>'
+                '<div id="lu-approuve-placeholder" style="width:260px;height:50px;">'
+                f'<img src="data:image/png;base64,{lu_b64}" style="max-width:260px;max-height:50px;"/></div>'
             ),
             html,
             flags=re.DOTALL,
@@ -261,8 +253,8 @@ def _embed_signature_in_pdf(
     html = re.sub(
         r'<div id="signature-placeholder"[^>]*>.*?</div>',
         (
-            '<div id="signature-placeholder" style="width:260px;height:80px;border-bottom:1px solid #000;display:flex;align-items:flex-end;">'
-            f'<img src="data:image/png;base64,{sig_b64}" style="max-width:260px;max-height:76px;object-fit:contain;object-position:bottom;display:block;"/></div>'
+            '<div id="signature-placeholder" style="width:260px;height:80px;">'
+            f'<img src="data:image/png;base64,{sig_b64}" style="max-width:260px;max-height:80px;"/></div>'
         ),
         html,
         flags=re.DOTALL,
@@ -272,7 +264,7 @@ def _embed_signature_in_pdf(
     meta = (
         '<div style="margin-top:16px;padding:8px;background:#f9f9f9;border:1px solid #ddd;'
         'font-size:9pt;color:#555;font-family:Arial,sans-serif;">'
-        f'Signé électroniquement par : <strong>{signer_name}</strong> | '
+        f'Signe electroniquement par : <strong>{signer_name}</strong> | '
         f'Date : {date_str} | IP : {signer_ip} | Ville : {city}'
         '</div>'
     )
@@ -288,10 +280,15 @@ def _embed_signature_in_pdf(
 def _send_signing_email(signer_name: str, signer_email: str, signing_url: str,
                          doc_id: str, language: str) -> None:
     try:
-        if not signer_email:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user:
             return
+
         labels = {
-            "fr": ("Document à signer", "Bonjour", "Vous avez reçu un document à signer.", "Signer le document"),
+            "fr": ("Document a signer", "Bonjour", "Vous avez recu un document a signer.", "Signer le document"),
             "en": ("Document to sign", "Hello", "You have received a document to sign.", "Sign document"),
             "zh": ("请签署文件", "您好", "您收到了一份需要签署的文件。", "签署文件"),
         }.get(language, ("Document to sign", "Hello", "You have received a document to sign.", "Sign document"))
@@ -315,7 +312,18 @@ def _send_signing_email(signer_name: str, signer_email: str, signing_url: str,
           </div>
         </div>
         """
-        _send_html_email(signer_email, subject, html)
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"ClawShow eSign <{user}>"
+        msg["To"] = signer_email
+        msg.attach(MIMEText(html, "html", "utf-8"))
+
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
+            srv.login(user, pwd)
+            srv.send_message(msg)
     except Exception:
         pass  # Email failure must not break the tool
 
@@ -432,7 +440,7 @@ def register(mcp, record_call: Callable) -> None:
 # V2: Multi-page overlay + school counter-sign
 
 _DEFAULT_SIG_POSITIONS = {
-    "paraphe":   {"x": 397, "y": 40, "w": 130, "h": 26},
+    "paraphe":   {"x": 390, "y": 22, "w": 160, "h": 48},
     "final_lu":  {"x": 90,  "y": 130, "w": 220, "h": 38},
     "final_sig": {"x": 90,  "y": 70,  "w": 220, "h": 70},
     "school_sig":{"x": 330, "y": 30,  "w": 200, "h": 70},
@@ -446,15 +454,12 @@ def _overlay_signatures_pdf(
     final_sig: dict,
     sig_positions: dict = None,
     school_sig: dict = None,
-    certificate_page: bool = False,
 ) -> None:
     """
     Overlay paraphes on each page + full signature block on last page.
     paraphes: {page_num: bytes} (1-indexed)
     final_sig: {sig_bytes, lu_bytes, city, signer_name, signed_at, signer_ip}
     school_sig: optional {sig_bytes, city, signer_name, signed_at} for counter-sign
-    certificate_page: if True, append a dedicated signature certificate page instead of
-                      overlaying on the last page (for uploaded external PDFs)
     """
     from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.lib.utils import ImageReader
@@ -474,7 +479,7 @@ def _overlay_signatures_pdf(
         is_last = (page_num == total)
 
         has_paraphe = page_num in paraphes and paraphes[page_num]
-        has_final = is_last and not certificate_page and final_sig and final_sig.get("sig_bytes")
+        has_final = is_last and final_sig and final_sig.get("sig_bytes")
 
         if has_paraphe or has_final:
             packet = _io.BytesIO()
@@ -554,10 +559,6 @@ def _overlay_signatures_pdf(
 
         writer.add_page(page)
 
-    if certificate_page and final_sig and final_sig.get("sig_bytes"):
-        cert_reader = _build_signature_certificate_page(final_sig, school_sig=school_sig)
-        writer.add_page(cert_reader.pages[0])
-
     os.makedirs(os.path.dirname(signed_pdf), exist_ok=True)
     with open(signed_pdf, "wb") as f:
         writer.write(f)
@@ -572,7 +573,11 @@ def _send_school_notification_email(
 ) -> None:
     """Email school admin when student has signed asking for counter-signature."""
     try:
-        if not school_email:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not school_email:
             return
         subject = f"[ClawShow eSign] Convention signee par {student_name} — a contresigner"
         html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
@@ -592,7 +597,8 @@ def _send_school_notification_email(
             <p style="font-size:12px;color:#999">Document ID: {doc_id}</p>
           </div>
         </div>"""
-        _send_html_email(school_email, subject, html)
+        _send_html_email(user, pwd, host, port, school_email,
+                         f"ClawShow eSign <{user}>", subject, html)
     except Exception:
         pass
 
@@ -602,26 +608,31 @@ def _send_completion_email(
 ) -> None:
     """Email both parties when document is fully signed."""
     try:
-        if not recipient_email:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not recipient_email:
             return
-        subject = "[ClawShow eSign] Document signé par toutes les parties"
+        subject = "[ClawShow eSign] Document signe par toutes les parties"
         html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
           <div style="background:#1a1a2e;padding:24px;text-align:center;border-radius:12px 12px 0 0">
             <h1 style="color:white;margin:0;font-size:20px">ClawShow eSign &#x2705;</h1>
           </div>
           <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">
             <p>Bonjour {recipient_name},</p>
-            <p>Le document a été signé par toutes les parties.</p>
+            <p>Le document a ete signe par toutes les parties.</p>
             <div style="text-align:center;margin:28px 0">
               <a href="{signed_pdf_url}"
                  style="background:#28a745;color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-size:16px;font-weight:600">
-                Télécharger le document signé
+                Telecharger le document signe
               </a>
             </div>
             <p style="font-size:12px;color:#999">Document ID: {doc_id}</p>
           </div>
         </div>"""
-        _send_html_email(recipient_email, subject, html)
+        _send_html_email(user, pwd, host, port, recipient_email,
+                         f"ClawShow eSign <{user}>", subject, html)
     except Exception:
         pass
 
@@ -630,11 +641,15 @@ def _send_expiration_email(recipient_name: str, recipient_email: str,
                             doc_id: str, lang: str = "fr") -> None:
     """Email signers when a document has expired."""
     try:
-        if not recipient_email:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not recipient_email:
             return
-        subject = "[ClawShow eSign] Document expiré" if lang == "fr" else "[ClawShow eSign] Document expiréd"
+        subject = "[ClawShow eSign] Document expire" if lang == "fr" else "[ClawShow eSign] Document expired"
         body = (
-            f"<p>Bonjour {recipient_name},</p><p>Le document (ID: {doc_id}) a expiré sans avoir été signé par toutes les parties.</p>"
+            f"<p>Bonjour {recipient_name},</p><p>Le document (ID: {doc_id}) a expire sans avoir ete signe par toutes les parties.</p>"
             if lang == "fr" else
             f"<p>Hello {recipient_name},</p><p>Document (ID: {doc_id}) has expired without being signed by all parties.</p>"
         )
@@ -644,7 +659,8 @@ def _send_expiration_email(recipient_name: str, recipient_email: str,
           </div>
           <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">{body}</div>
         </div>"""
-        _send_html_email(recipient_email, subject, html)
+        _send_html_email(user, pwd, host, port, recipient_email,
+                         f"ClawShow eSign <{user}>", subject, html)
     except Exception:
         pass
 
@@ -652,7 +668,11 @@ def _send_expiration_email(recipient_name: str, recipient_email: str,
 def _send_otp_email(signer_name: str, signer_email: str, code: str) -> None:
     """Send OTP verification code email."""
     try:
-        if not signer_email:
+        host = os.getenv("SMTP_HOST", "")
+        port = int(os.getenv("SMTP_PORT", "465"))
+        user = os.getenv("SMTP_USER", "")
+        pwd = os.getenv("SMTP_PASS", "")
+        if not host or not user or not signer_email:
             return
         subject = f"[ClawShow eSign] Votre code de verification : {code}"
         html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
@@ -672,15 +692,26 @@ def _send_otp_email(signer_name: str, signer_email: str, code: str) -> None:
             <p style="font-size:11px;color:#aaa;text-align:center">ClawShow eSign — Signature Electronique Avancee (AES)</p>
           </div>
         </div>"""
-        _send_html_email(signer_email, subject, html)
+        _send_html_email(user, pwd, host, port, signer_email,
+                         f"ClawShow eSign <{user}>", subject, html)
     except Exception:
         pass
 
 
-def _send_html_email(to: str, subject: str, html: str) -> None:
-    """Send HTML email via Resend API (ClawShow eSign <esign@clawshow.ai>)."""
-    from adapters.esign.mailer import send_html
-    send_html(to, subject, html)
+def _send_html_email(user: str, pwd: str, host: str, port: int,
+                      to: str, from_: str, subject: str, html: str) -> None:
+    """Internal helper to send an HTML email via SMTP_SSL."""
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = from_
+    msg["To"] = to
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL(host, port, context=ctx) as srv:
+        srv.login(user, pwd)
+        srv.send_message(msg)
 
 
 # ---------------------------------------------------------------------------

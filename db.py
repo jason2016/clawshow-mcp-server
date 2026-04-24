@@ -867,6 +867,13 @@ def get_esign_document(doc_id: str) -> dict | None:
     return d
 
 
+
+def update_esign_signature_positions(doc_id: str, positions: dict) -> None:
+    """Persist custom signature zone positions for a document."""
+    with get_conn() as conn:
+        conn.execute("UPDATE esign_documents SET signature_positions=? WHERE id=?",
+                     (json.dumps(positions), doc_id))
+
 def update_esign_s3_url(doc_id: str, s3_url: str) -> None:
     """Persist S3 URL for the signed PDF."""
     with get_conn() as conn:

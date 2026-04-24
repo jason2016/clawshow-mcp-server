@@ -40,7 +40,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, HTMLResponse
 from starlette.routing import Mount, Route
 
 from mcp.server.fastmcp import FastMCP
@@ -1235,7 +1235,7 @@ button{cursor:pointer}
 <div id="resultArea" style="display:none"></div>
 
 <!-- MODAL: SIGNATURE SETUP -->
-<div id="sigModal" class="modal-bg" style="display:none">
+<div id="sigModal" class="modal-bg" style="display:flex">
   <div class="modal-box">
     <div id="sigInstr">&#9997;&#65039; <strong>&#201;tape 1</strong> — Configurez votre signature ci-dessous, puis cliquez <strong>Signer</strong> pour passer aux zones &#224; signer dans le document.</div>
     <h3 id="mSetupH3" style="margin-bottom:8px"></h3>
@@ -1348,6 +1348,7 @@ const S = {
   paraphes:{},
   ff:{cb1:false,cb2:false,city:false,lu:false,fs:false},
   savedSig:null,
+  adjustedParaphePos:null,
   sigTarget:null, sigPage:null,
   font:FONTS[0].css, color:'#000000',
   drawHas:false, imgData:null,
@@ -1355,6 +1356,36 @@ const S = {
   dCtx:null, luCtx:null, fsCtx:null
 };
 
+/* ---- COORD CONVERSION + DRAG ---- */
+const PDF_W=595,PDF_H=842,PDF_SC=2.0;
+function _pdfToImg(px,py,pw,ph,imgEl){
+  const s=imgEl.offsetWidth/(PDF_W*PDF_SC);
+  return{l:px*PDF_SC*s,t:(PDF_H-py-ph)*PDF_SC*s,w:pw*PDF_SC*s,h:ph*PDF_SC*s};}
+function _imgToPdf(il,it,iw,ih,imgEl){
+  const s=imgEl.offsetWidth/(PDF_W*PDF_SC);
+  return{x:Math.round(il/(PDF_SC*s)),y:Math.round(PDF_H-it/(PDF_SC*s)-ih/(PDF_SC*s)),
+         w:Math.round(iw/(PDF_SC*s)),h:Math.round(ih/(PDF_SC*s))};}
+let _zDrag=null;
+document.addEventListener('mousemove',e=>{
+  if(!_zDrag)return;
+  const r=_zDrag.el.parentElement.getBoundingClientRect();
+  _zDrag.el.style.left=Math.max(0,Math.min(e.clientX-r.left-_zDrag.ox,r.width-_zDrag.el.offsetWidth))+'px';
+  _zDrag.el.style.top=Math.max(0,Math.min(e.clientY-r.top-_zDrag.oy,r.height-_zDrag.el.offsetHeight))+'px';});
+document.addEventListener('touchmove',e=>{
+  if(!_zDrag)return;e.preventDefault();
+  const t=e.touches[0],r=_zDrag.el.parentElement.getBoundingClientRect();
+  _zDrag.el.style.left=Math.max(0,Math.min(t.clientX-r.left-_zDrag.ox,r.width-_zDrag.el.offsetWidth))+'px';
+  _zDrag.el.style.top=Math.max(0,Math.min(t.clientY-r.top-_zDrag.oy,r.height-_zDrag.el.offsetHeight))+'px';},{passive:false});
+document.addEventListener('mouseup',()=>{
+  if(!_zDrag)return;
+  const z=_zDrag.el,img=document.getElementById('pageImg');
+  S.adjustedParaphePos=_imgToPdf(parseFloat(z.style.left)||0,parseFloat(z.style.top)||0,z.offsetWidth,z.offsetHeight,img);
+  _zDrag=null;});
+document.addEventListener('touchend',()=>{
+  if(!_zDrag)return;
+  const z=_zDrag.el,img=document.getElementById('pageImg');
+  S.adjustedParaphePos=_imgToPdf(parseFloat(z.style.left)||0,parseFloat(z.style.top)||0,z.offsetWidth,z.offsetHeight,img);
+  _zDrag=null;});
 /* ---- PROGRESS ---- */
 function reqLeft(){
   let d=Object.keys(S.paraphes).length;
@@ -1432,10 +1463,33 @@ function renderZones(){
   const n=S.cur,done=!!S.paraphes[n];
   const z=document.createElement('div');
   z.className='sz '+(done?'done':'pend');
-  z.style.cssText='right:3.5%;bottom:2%;width:18%;height:6%';
-  if(done){const img=document.createElement('img');img.src=S.paraphes[n];z.appendChild(img);}
-  else{z.innerHTML='<span class="zi">\\u270d</span><span class="zh">'+(L.zone_sign||'Signer ici')+'</span>';z.addEventListener('click',()=>zoneClick(n));}
+  z.style.position='absolute';
+  const img=document.getElementById('pageImg');
+  const basePos=(C.zone_positions&&C.zone_positions.paraphe)||{x:397,y:40,w:130,h:45};
+  function applyPos(){
+    const p=S.adjustedParaphePos||basePos;
+    const d=_pdfToImg(p.x,p.y,p.w,p.h,img);
+    z.style.left=d.l+'px';z.style.top=d.t+'px';z.style.width=d.w+'px';z.style.height=d.h+'px';}
+  if(done){
+    const si=document.createElement('img');si.src=S.paraphes[n];z.appendChild(si);
+  } else {
+    z.innerHTML='<span class="zi">\\u270d</span><span class="zh">'+(L.zone_sign||'Signer ici')+'</span>';
+    z.style.cursor='move';
+    let _ds=null;
+    z.addEventListener('mousedown',e=>{
+      e.preventDefault();const r=z.getBoundingClientRect();
+      _ds={x:e.clientX,y:e.clientY};
+      _zDrag={el:z,ox:e.clientX-r.left,oy:e.clientY-r.top};});
+    z.addEventListener('touchstart',e=>{
+      const t=e.touches[0],r=z.getBoundingClientRect();
+      _ds={x:t.clientX,y:t.clientY};
+      _zDrag={el:z,ox:t.clientX-r.left,oy:t.clientY-r.top};},{passive:false});
+    z.addEventListener('click',e=>{
+      if(_ds&&Math.abs(e.clientX-_ds.x)<5&&Math.abs(e.clientY-_ds.y)<5)zoneClick(n);});
+  }
   c.appendChild(z);
+  if(img.complete&&img.naturalWidth>0)applyPos();
+  else img.addEventListener('load',applyPos,{once:true});
 }
 
 /* ---- ZONE CLICK ---- */
@@ -1722,7 +1776,7 @@ function doFinish(){
   document.getElementById('btnNextField').disabled=true;
   fetch('/esign/'+C.doc_id+'/sign'+(C.token?'?token='+C.token:''),{
     method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({token:C.token,paraphes,signature_png:fsPng,lu_approuve_png:luPng,city,accept_conditions:document.getElementById("cb1").checked,accept_email:true})
+    body:JSON.stringify({token:C.token,paraphes,signature_png:fsPng,lu_approuve_png:luPng,city,accept_conditions:document.getElementById("cb1").checked,accept_email:true,paraphe_pos:S.adjustedParaphePos})
   }).then(r=>r.json()).then(d=>{
     document.getElementById('appWrap').style.display='none';
     document.getElementById('topBar').style.display='none';
@@ -1907,6 +1961,12 @@ def _render_signing_page(doc: dict, token: str = "") -> str:
     lang = doc.get("language", "fr")
     labels = _LABELS.get(lang, _LABELS["en"])
     total_pages = doc.get("total_pages") or 1
+    sig_pos_raw = doc.get("signature_positions")
+    if sig_pos_raw:
+        zone_positions = _json.loads(sig_pos_raw) if isinstance(sig_pos_raw, str) else sig_pos_raw
+    else:
+        from tools.esign import _DEFAULT_SIG_POSITIONS as _dp
+        zone_positions = {k: v for k, v in _dp.items()}
     config = _json.dumps({
         "doc_id": doc["id"],
         "token": token,
@@ -1914,6 +1974,7 @@ def _render_signing_page(doc: dict, token: str = "") -> str:
         "signer_name": doc.get("signer_name", ""),
         "lang": lang,
         "labels": labels,
+        "zone_positions": zone_positions,
     }, ensure_ascii=False)
     page = _SIGNING_PAGE_TEMPLATE
     page = page.replace("__CONFIG_JSON__", config)
@@ -1927,6 +1988,163 @@ def _render_signing_page(doc: dict, token: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 from adapters.esign.otp_handler import esign_otp_send, esign_otp_verify
+from adapters.esign.auth import (
+    auth_signup, auth_login_otp_send, auth_login_verify,
+    auth_logout, auth_me, auth_user_documents, get_session_user,
+)
+from adapters.esign.pages import (
+    page_signup, page_login, page_login_verify,
+    page_dashboard, page_new_esign,
+)
+
+# ─────────────────────────────────────────────────────────────────
+# eSign Setup — drag-and-drop zone position editor
+# ─────────────────────────────────────────────────────────────────
+_ESIGN_SETUP_TEMPLATE = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClawShow eSign — Zones</title>
+<style>
+*{box-sizing:border-box}body{font-family:Arial,sans-serif;margin:0;background:#f0f2f5}
+.hdr{background:#1976d2;color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between}
+.hdr h2{margin:0;font-size:15px}.container{max-width:760px;margin:20px auto;padding:0 16px}
+.page-wrap{position:relative;margin-bottom:28px;display:block}
+.page-img{display:block;width:100%;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+.zone{position:absolute;border:2px dashed #E6A817;background:rgba(230,168,23,.18);cursor:move;
+  border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:10px;
+  color:#7B5B00;font-weight:700;user-select:none;min-height:44px}
+.zone.fz{border-color:#1976d2;background:rgba(25,118,210,.14);color:#0d47a1}
+.zlbl{position:absolute;top:-17px;left:0;font-size:10px;white-space:nowrap;
+  background:#444;color:#fff;padding:1px 6px;border-radius:2px;pointer-events:none}
+.sec{font-size:13px;font-weight:700;color:#444;padding:6px 10px;background:#fff;
+  border-left:3px solid #1976d2;border-radius:2px;margin:0 0 8px}
+.bar{position:sticky;bottom:0;background:#fff;border-top:2px solid #ddd;
+  padding:12px 20px;display:flex;gap:12px;align-items:center}
+.btn{padding:9px 22px;border:none;border-radius:5px;cursor:pointer;font-size:14px;font-weight:700}
+.bsave{background:#1976d2;color:#fff}.bsave:hover{background:#1565c0}
+.msg{font-size:13px;color:#666}
+</style></head><body>
+<div class="hdr">
+  <h2>ClawShow eSign &mdash; R&eacute;glage des zones</h2>
+  <span style="font-size:12px;opacity:.85">__DOC_ID__</span>
+</div>
+<div class="container">
+  <p style="color:#555;font-size:13px;margin:0 0 16px">
+    Glissez les zones pour les aligner avec les emplacements de signature dans le document.
+  </p>
+  <div class="sec">Page repr&eacute;sentative &mdash; Paraphe (toutes les pages)</div>
+  <div class="page-wrap" id="pRep">
+    <img class="page-img" id="iRep" src="/esign/__DOC_ID__/page/1.png" alt="p1"/>
+  </div>
+  <div class="sec">Derni&egrave;re page &mdash; Signature finale</div>
+  <div class="page-wrap" id="pLast">
+    <img class="page-img" id="iLast" src="/esign/__DOC_ID__/page/__LAST__.png" alt="last"/>
+  </div>
+</div>
+<div class="bar">
+  <button class="btn bsave" onclick="save()">Enregistrer</button>
+  <span class="msg" id="msg"></span>
+</div>
+<script>
+const ID='__DOC_ID__',W=595,H=842,SC=2.0;
+let Z=__ZONES__;
+let dr=null;
+
+function p2i(px,py,pw,ph,iw){const s=iw/(W*SC);
+  return{l:px*SC*s,t:(H-py-ph)*SC*s,w:pw*SC*s,h:ph*SC*s};}
+function i2p(il,it,iw,ih,imgW){const s=imgW/(W*SC);
+  return{x:Math.round(il/(SC*s)),y:Math.round(H-it/(SC*s)-ih/(SC*s)),
+         w:Math.round(iw/(SC*s)),h:Math.round(ih/(SC*s))};}
+
+function mkZone(id,lbl,fin,wrap,img){
+  const z=document.createElement('div');
+  z.className='zone'+(fin?' fz':'');z.dataset.z=id;
+  z.innerHTML='<span class="zlbl">'+lbl+'</span>'+lbl;
+  z.addEventListener('mousedown',e=>{e.preventDefault();
+    const r=z.getBoundingClientRect();
+    dr={z,ox:e.clientX-r.left,oy:e.clientY-r.top,wrap,img};});
+  z.addEventListener('touchstart',e=>{e.preventDefault();
+    const t=e.touches[0],r=z.getBoundingClientRect();
+    dr={z,ox:t.clientX-r.left,oy:t.clientY-r.top,wrap,img};},{passive:false});
+  posZ(z,id,img);wrap.appendChild(z);}
+
+function posZ(z,id,img){
+  const p=Z[id];if(!p)return;
+  const d=p2i(p.x,p.y,p.w,p.h,img.offsetWidth);
+  z.style.left=d.l+'px';z.style.top=d.t+'px';z.style.width=d.w+'px';z.style.height=d.h+'px';}
+
+function mv(cx,cy){if(!dr)return;
+  const r=dr.wrap.getBoundingClientRect();
+  dr.z.style.left=Math.max(0,cx-r.left-dr.ox)+'px';
+  dr.z.style.top=Math.max(0,cy-r.top-dr.oy)+'px';}
+document.addEventListener('mousemove',e=>mv(e.clientX,e.clientY));
+document.addEventListener('touchmove',e=>{e.preventDefault();
+  mv(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+
+function endDr(){if(!dr)return;
+  const z=dr.z,id=z.dataset.z,img=dr.img;
+  const p=i2p(parseFloat(z.style.left)||0,parseFloat(z.style.top)||0,
+               parseFloat(z.style.width)||80,parseFloat(z.style.height)||20,img.offsetWidth);
+  Z[id]={...Z[id],...p};dr=null;}
+document.addEventListener('mouseup',endDr);
+document.addEventListener('touchend',endDr);
+
+function save(){
+  const m=document.getElementById('msg');m.textContent='...';m.style.color='#666';
+  fetch('/esign/'+ID+'/setup',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({positions:Z})})
+  .then(r=>r.json()).then(d=>{
+    if(d.success){m.textContent='\u2713 Enregistr\u00e9';m.style.color='#2e7d32';}
+    else{m.textContent='Erreur: '+(d.error||'?');m.style.color='#c62828';}
+  }).catch(()=>{m.textContent='Erreur r\u00e9seau';m.style.color='#c62828';});}
+
+function init(){
+  const rWrap=document.getElementById('pRep'),rImg=document.getElementById('iRep');
+  const lWrap=document.getElementById('pLast'),lImg=document.getElementById('iLast');
+  function s1(){mkZone('paraphe','Paraphe',false,rWrap,rImg);}
+  function s2(){mkZone('final_lu','Lu et approuv\u00e9',true,lWrap,lImg);
+                mkZone('final_sig','Signature finale',true,lWrap,lImg);}
+  if(rImg.complete)s1();else rImg.onload=s1;
+  if(lImg.complete)s2();else lImg.onload=s2;}
+init();
+window.addEventListener('resize',()=>{
+  document.querySelectorAll('.zone').forEach(z=>{
+    const img=z.parentElement.querySelector('img');posZ(z,z.dataset.z,img);});});
+</script></body></html>"""
+
+
+async def esign_setup_get(request: Request):
+    """GET /esign/{document_id}/setup — visual zone position editor."""
+    doc_id = request.path_params["document_id"]
+    doc = db.get_esign_document(doc_id)
+    if not doc:
+        return HTMLResponse("<h2>Document not found</h2>", status_code=404)
+    total_pages = doc.get("total_pages") or 1
+    sig_raw = doc.get("signature_positions")
+    if sig_raw:
+        cur = json.loads(sig_raw) if isinstance(sig_raw, str) else sig_raw
+    else:
+        from tools.esign import _DEFAULT_SIG_POSITIONS as _dp
+        cur = {k: v for k, v in _dp.items() if k != "school_sig"}
+    html = (_ESIGN_SETUP_TEMPLATE
+            .replace("__DOC_ID__", doc_id)
+            .replace("__LAST__", str(total_pages))
+            .replace("__ZONES__", json.dumps(cur)))
+    return HTMLResponse(html)
+
+
+async def esign_setup_post(request: Request):
+    """POST /esign/{document_id}/setup — save zone positions."""
+    doc_id = request.path_params["document_id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    positions = body.get("positions")
+    if not positions or not all(k in positions for k in ("paraphe", "final_lu", "final_sig")):
+        return JSONResponse({"error": "positions must contain paraphe, final_lu, final_sig"}, status_code=400)
+    db.update_esign_signature_positions(doc_id, positions)
+    return JSONResponse({"success": True, "document_id": doc_id})
+
 
 async def esign_page_image(request: Request):
     """GET /esign/{document_id}/page/{page_num}.png — serve a PDF page as PNG."""
@@ -1960,6 +2178,104 @@ async def esign_page_image(request: Request):
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+
+async def esign_user_create(request: Request) -> JSONResponse:
+    # POST /esign/user/create - SaaS portal. Requires session cookie. Deducts 1 quota.
+    from adapters.esign.auth import get_session_user as _gsu
+    user = _gsu(request)
+    if not user:
+        return JSONResponse({"error": "Non authentifie"}, status_code=401)
+
+    remaining = user["free_quota_total"] - user["free_quota_used"]
+    if remaining <= 0:
+        return JSONResponse({
+            "error": "quota_exceeded",
+            "message": "Quota gratuit epuise. Contactez-nous pour upgrader.",
+            "upgrade_url": "mailto:contact@clawshow.ai?subject=Upgrade%20eSign",
+        }, status_code=402)
+
+    try:
+        form = await request.form()
+    except Exception:
+        return JSONResponse({"error": "Formulaire invalide"}, status_code=400)
+
+    signer_name = str(form.get("signer_name") or "").strip()
+    signer_email = str(form.get("signer_email") or "").strip()
+    message = str(form.get("message") or "").strip()
+    pdf_upload = form.get("pdf")
+
+    if not signer_name or not signer_email:
+        return JSONResponse({"error": "Nom et e-mail du signataire requis"}, status_code=400)
+    if not pdf_upload or not hasattr(pdf_upload, "read"):
+        return JSONResponse({"error": "Document PDF requis"}, status_code=400)
+
+    import asyncio as _aio
+    import threading as _th
+    import secrets as _sec
+    from tools.esign import _next_doc_id, _generate_page_images, _send_signing_email
+    from pathlib import Path as _Path
+
+    namespace = "user_" + str(user["id"])
+    doc_id = _next_doc_id(namespace)
+
+    esign_dir = _Path("/opt/clawshow-mcp-server/data/esign") / namespace
+    esign_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = str(esign_dir / (doc_id + ".pdf"))
+
+    pdf_bytes = await pdf_upload.read()
+    with open(pdf_path, "wb") as fh:
+        fh.write(pdf_bytes)
+
+    from pypdf import PdfReader
+    try:
+        total_pages = len(PdfReader(pdf_path).pages)
+    except Exception:
+        total_pages = 1
+
+    loop = _aio.get_event_loop()
+    await loop.run_in_executor(None, _generate_page_images, pdf_path, doc_id, namespace)
+
+    signer_token = _sec.token_urlsafe(32)
+
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO esign_documents "
+            "(id, namespace, status, signer_name, signer_email, template, total_pages, pdf_path, creator_user_id) "
+            "VALUES (?, ?, 'pending', ?, ?, 'upload', ?, ?, ?)",
+            (doc_id, namespace, signer_name, signer_email, "upload", total_pages, pdf_path, user["id"]),
+        )
+        conn.execute(
+            "INSERT INTO esign_signers (document_id, signer_name, signer_email, token, order_num) "
+            "VALUES (?, ?, ?, ?, 1)",
+            (doc_id, signer_name, signer_email, signer_token),
+        )
+        conn.execute(
+            "UPDATE esign_users SET free_quota_used = free_quota_used + 1 WHERE id = ?",
+            (user["id"],),
+        )
+
+    esign_base = os.getenv("MCP_BASE_URL", "https://esign-api.clawshow.ai")
+    signing_url = esign_base + "/esign/" + doc_id + "?token=" + signer_token
+
+    def _send_invite():
+        _send_signing_email(signer_name, signer_email, signing_url, doc_id, message or None)
+    _th.Thread(target=_send_invite, daemon=True).start()
+
+    import logging as _log
+    _log.getLogger(__name__).info(
+        "esign_user_create: user=%s*** doc=%s quota=%d/%d",
+        user["email"][:4], doc_id,
+        user["free_quota_used"] + 1, user["free_quota_total"],
+    )
+
+    return JSONResponse({
+        "doc_id": doc_id,
+        "signing_url": signing_url,
+        "status": "pending",
+        "quota_remaining": remaining - 1,
+    })
 
 
 async def esign_create(request: Request) -> JSONResponse:
@@ -2163,6 +2479,7 @@ async def esign_create(request: Request) -> JSONResponse:
         "signing_url": signing_url,
         "pdf_preview_url": pdf_preview_url,
         "total_pages": total_pages,
+        "setup_url": f"{MCP_BASE_URL}/esign/{doc_id}/setup",
         "status": "student_signing",
         "signer_email": signer_email,
         "signers": signer_responses,
@@ -2246,6 +2563,7 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
     lu_data_url = body.get("lu_approuve_png", "")
     city = body.get("city", "Paris") or "Paris"
     paraphes_raw = body.get("paraphes", {})  # {page_num_str: dataURL}
+    paraphe_pos_override = body.get("paraphe_pos")  # {x,y,w,h} dragged by signer
 
     # OTP gate: signer must have verified OTP before submitting
     if token:
@@ -2305,7 +2623,16 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
                 _overlay_signatures_pdf(signed_pdf, _tmp, paraphes=paraphes_bytes, final_sig={})
                 _shutil.move(_tmp, signed_pdf)
         else:
-            # Uploaded PDF: coordinate-based overlay
+            # Uploaded PDF: append a signature certificate page (preserves original layout)
+            _saved_pos_raw = doc.get("signature_positions")
+            _saved_pos = (json.loads(_saved_pos_raw) if isinstance(_saved_pos_raw, str) else _saved_pos_raw) if _saved_pos_raw else None
+            if paraphe_pos_override and isinstance(paraphe_pos_override, dict):
+                if _saved_pos is None:
+                    from tools.esign import _DEFAULT_SIG_POSITIONS as _dp_
+                    _saved_pos = dict(_dp_)
+                else:
+                    _saved_pos = dict(_saved_pos)
+                _saved_pos["paraphe"] = paraphe_pos_override
             from tools.esign import _overlay_signatures_pdf
             _overlay_signatures_pdf(
                 original_pdf, signed_pdf,
@@ -2317,7 +2644,10 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
                     "signer_name": doc["signer_name"],
                     "signed_at": signed_at,
                     "signer_ip": signer_ip,
+                    "doc_id": doc_id,
                 },
+                sig_positions=_saved_pos,
+                certificate_page=True,
             )
     except Exception as e:
         return JSONResponse({"error": f"PDF signing failed: {e}"}, status_code=500)
@@ -3202,7 +3532,22 @@ def _build_app() -> Starlette:
             Route("/api/payment/create", api_payment_create, methods=["POST"]),
             Route("/api/payment/verify", api_payment_verify, methods=["GET"]),
             Route("/esign-documents/recent", esign_documents_recent, methods=["GET"]),
+            # eSign user portal (esign.clawshow.ai)
+            Route("/signup", page_signup, methods=["GET"]),
+            Route("/login", page_login, methods=["GET"]),
+            Route("/login/verify", page_login_verify, methods=["GET"]),
+            Route("/dashboard", page_dashboard, methods=["GET"]),
+            Route("/new", page_new_esign, methods=["GET"]),
+            Route("/esign/auth/signup", auth_signup, methods=["POST"]),
+            Route("/esign/auth/login/otp/send", auth_login_otp_send, methods=["POST"]),
+            Route("/esign/auth/login/verify", auth_login_verify, methods=["POST"]),
+            Route("/esign/auth/logout", auth_logout, methods=["POST"]),
+            Route("/esign/auth/me", auth_me, methods=["GET"]),
+            Route("/esign/user/documents", auth_user_documents, methods=["GET"]),
+            Route("/esign/user/create", esign_user_create, methods=["POST"]),
             Route("/esign/create", esign_create, methods=["POST"]),
+            Route("/esign/{document_id}/setup", esign_setup_get, methods=["GET"]),
+            Route("/esign/{document_id}/setup", esign_setup_post, methods=["POST"]),
             Route("/esign/{document_id}/page/{page_num}.png", esign_page_image, methods=["GET"]),
             Route("/esign/{document_id}/otp/send", esign_otp_send, methods=["POST"]),
             Route("/esign/{document_id}/otp/verify", esign_otp_verify, methods=["POST"]),
