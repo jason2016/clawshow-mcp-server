@@ -1148,7 +1148,7 @@ button{cursor:pointer}
 .font-btn.on{border-color:#1976d2;background:#e3f2fd}
 .col-btn{width:26px;height:26px;border-radius:50%;border:2px solid transparent}
 .col-btn.on{box-shadow:0 0 0 2px #555}
-#typePrev{border:1px solid #e0e0e0;border-radius:6px;height:68px;background:#fafafa;overflow:hidden;margin-bottom:10px;display:flex;align-items:center;justify-content:center}
+#typePrev{border:1px solid #e0e0e0;border-radius:6px;height:88px;background:#fafafa;overflow:hidden;margin-bottom:10px;display:flex;align-items:center;justify-content:center}
 #typePrevCv{max-width:100%}
 .draw-wrap{border:1px solid #ddd;border-radius:6px;background:#fafafa;margin-bottom:6px}
 #drawCv{width:100%;display:block;height:120px;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 21l5-2L20 7a2 2 0 00-3-3L5 16z' fill='%23333' stroke='%23fff' stroke-width='0.5'/><path d='M3 21l2-1-1-1z' fill='%23555'/></svg>") 3 21,crosshair}
@@ -1218,11 +1218,11 @@ button{cursor:pointer}
       <div class="ff"><label id="cityLbl"></label><input type="text" id="cityInp" oninput="onFF()"/></div>
       <div class="ff">
         <label id="luLbl"></label>
-        <div class="cvwrap"><canvas id="luCv" height="80"></canvas><button class="cv-clr" id="luClrBtn" onclick="clrLu()"></button></div>
+        <div class="cvwrap"><canvas id="luCv" height="110"></canvas><button class="cv-clr" id="luClrBtn" onclick="clrLu()"></button></div>
       </div>
       <div class="ff">
         <label id="sigLbl"></label>
-        <div class="cvwrap"><canvas id="fsCv" height="90"></canvas><button class="cv-clr" id="fsClrBtn" onclick="clrFs()"></button></div>
+        <div class="cvwrap"><canvas id="fsCv" height="130"></canvas><button class="cv-clr" id="fsClrBtn" onclick="clrFs()"></button></div>
         <button class="use-saved-btn" id="useSavedBtn" onclick="useSavedSig()"></button>
       </div>
     </div>
@@ -1246,11 +1246,11 @@ button{cursor:pointer}
       <input class="name-inp" id="typeName" oninput="drawTyped()"/>
       <div class="font-row" id="fontRow"></div>
       <div class="color-row" id="tColRow"></div>
-      <div id="typePrev"><canvas id="typePrevCv" height="60"></canvas></div>
+      <div id="typePrev"><canvas id="typePrevCv" height="80"></canvas></div>
     </div>
     <div class="tp" id="tpDraw">
       <div class="color-row" id="dColRow"></div>
-      <div class="draw-wrap"><canvas id="drawCv" height="120"></canvas></div>
+      <div class="draw-wrap"><canvas id="drawCv" height="180"></canvas></div>
       <p class="cv-hint" id="cvHint"></p>
       <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:4px">
         <button class="btn-sec" id="undoBtn" onclick="undoDraw()" style="font-size:12px;padding:4px 10px">↩ Undo</button>
@@ -1421,7 +1421,7 @@ function renderZones(){
   const n=S.cur,done=!!S.paraphes[n];
   const z=document.createElement('div');
   z.className='sz '+(done?'done':'pend');
-  z.style.cssText='right:3.5%;bottom:2%;width:18%;height:6%';
+  z.style.cssText='right:3%;bottom:1.5%;width:30%;height:12%';
   if(done){const img=document.createElement('img');img.src=S.paraphes[n];z.appendChild(img);}
   else{z.innerHTML='<span class="zi">\\u270d</span><span class="zh">'+(L.zone_sign||'Signer ici')+'</span>';z.addEventListener('click',()=>zoneClick(n));}
   c.appendChild(z);
