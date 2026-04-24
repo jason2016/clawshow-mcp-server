@@ -251,8 +251,8 @@ def _embed_signature_in_pdf(
         html = re.sub(
             r'<div id="lu-approuve-placeholder"[^>]*>.*?</div>',
             (
-                '<div id="lu-approuve-placeholder" style="width:260px;height:50px;">'
-                f'<img src="data:image/png;base64,{lu_b64}" style="max-width:260px;max-height:50px;"/></div>'
+                '<div id="lu-approuve-placeholder" style="width:260px;height:50px;border-bottom:1px solid #000;display:flex;align-items:flex-end;">'
+                f'<img src="data:image/png;base64,{lu_b64}" style="max-width:260px;max-height:46px;object-fit:contain;object-position:bottom;display:block;"/></div>'
             ),
             html,
             flags=re.DOTALL,
@@ -261,8 +261,8 @@ def _embed_signature_in_pdf(
     html = re.sub(
         r'<div id="signature-placeholder"[^>]*>.*?</div>',
         (
-            '<div id="signature-placeholder" style="width:260px;height:80px;">'
-            f'<img src="data:image/png;base64,{sig_b64}" style="max-width:260px;max-height:80px;"/></div>'
+            '<div id="signature-placeholder" style="width:260px;height:80px;border-bottom:1px solid #000;display:flex;align-items:flex-end;">'
+            f'<img src="data:image/png;base64,{sig_b64}" style="max-width:260px;max-height:76px;object-fit:contain;object-position:bottom;display:block;"/></div>'
         ),
         html,
         flags=re.DOTALL,
@@ -432,7 +432,7 @@ def register(mcp, record_call: Callable) -> None:
 # V2: Multi-page overlay + school counter-sign
 
 _DEFAULT_SIG_POSITIONS = {
-    "paraphe":   {"x": 390, "y": 22, "w": 160, "h": 48},
+    "paraphe":   {"x": 420, "y": 16, "w": 110, "h": 30},
     "final_lu":  {"x": 90,  "y": 130, "w": 220, "h": 38},
     "final_sig": {"x": 90,  "y": 70,  "w": 220, "h": 70},
     "school_sig":{"x": 330, "y": 30,  "w": 200, "h": 70},
