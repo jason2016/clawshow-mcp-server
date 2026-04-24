@@ -1714,7 +1714,7 @@ function doFinish(){
   document.getElementById('btnNextField').disabled=true;
   fetch('/esign/'+C.doc_id+'/sign'+(C.token?'?token='+C.token:''),{
     method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({token:C.token,paraphes,signature_png:fsPng,lu_approuve_png:luPng,city,accept_conditions:true,accept_email:true})
+    body:JSON.stringify({token:C.token,paraphes,signature_png:fsPng,lu_approuve_png:luPng,city,accept_conditions:document.getElementById("legalCb").checked,accept_email:true})
   }).then(r=>r.json()).then(d=>{
     document.getElementById('appWrap').style.display='none';
     document.getElementById('topBar').style.display='none';
@@ -1808,7 +1808,7 @@ _LABELS = {
         "canvas_hint": "Signez avec votre doigt (mobile) ou votre souris",
         "name_placeholder": "Entrez votre nom",
         "final_title": "Informations de signature",
-        "cb1": "Je certifie avoir pris connaissance des conditions d'inscription et les accepter.",
+        "cb1": "J'ai lu et j'accepte les <a href=\"https://clawshow.ai/cgu\" target=\"_blank\" style=\"color:#1976d2\">CGU</a> et la <a href=\"https://clawshow.ai/confidentialite\" target=\"_blank\" style=\"color:#1976d2\">Politique de confidentialité</a>. ✅ Valeur juridique AES (eIDAS).",
         "cb2": "J'accepte les \u00e9changes par email en remplacement du courrier postal.",
         "city_label": "Fait \u00e0 (ville) :",
         "lu_label": "\u00c9crivez \u00ab lu et approuv\u00e9 \u00bb :",
@@ -2314,6 +2314,38 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
             )
     except Exception as e:
         return JSONResponse({"error": f"PDF signing failed: {e}"}, status_code=500)
+
+    # Consent: apply TEST watermark if signer did not accept CGU
+    _accept_cgu = bool(body.get("accept_conditions", False))
+    if not _accept_cgu:
+        try:
+            from adapters.esign.watermark import apply_watermark as _apply_wm
+            with open(signed_pdf, "rb") as _fw:
+                _wm_in = _fw.read()
+            _wm_out = _apply_wm(_wm_in)
+            with open(signed_pdf, "wb") as _fw:
+                _fw.write(_wm_out)
+            logger.info("TEST watermark applied: doc_id=%s", doc_id)
+        except Exception as _wm_err:
+            logger.error("Watermark failed: %s", _wm_err)
+    try:
+        import sqlite3 as _sql3
+        _cdb = _sql3.connect(str(DB_PATH))
+        if _accept_cgu:
+            _ccur = _cdb.execute(
+                "INSERT INTO esign_consents (doc_id, role, user_email, ip_address) VALUES (?, 'signer', ?, ?)",
+                (doc_id, doc.get("signer_email", ""), signer_ip)
+            )
+            _cdb.execute(
+                "UPDATE esign_documents SET is_production=1, signer_consent_id=? WHERE id=?",
+                (_ccur.lastrowid, doc_id)
+            )
+        else:
+            _cdb.execute("UPDATE esign_documents SET is_production=0 WHERE id=?", (doc_id,))
+        _cdb.commit()
+        _cdb.close()
+    except Exception as _ce:
+        logger.error("Consent DB failed: %s", _ce)
 
     # S3 archive — upload signed PDF (non-blocking, failure does not abort signing)
     try:
