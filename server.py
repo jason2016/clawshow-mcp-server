@@ -1148,7 +1148,7 @@ button{cursor:pointer}
 .font-btn.on{border-color:#1976d2;background:#e3f2fd}
 .col-btn{width:26px;height:26px;border-radius:50%;border:2px solid transparent}
 .col-btn.on{box-shadow:0 0 0 2px #555}
-#typePrev{border:1px solid #e0e0e0;border-radius:6px;height:228px;background:#fafafa;overflow:hidden;margin-bottom:10px;display:flex;align-items:center;justify-content:center}
+#typePrev{border:1px solid #e0e0e0;border-radius:6px;height:168px;background:#fafafa;overflow:hidden;margin-bottom:10px;display:flex;align-items:center;justify-content:center}
 #typePrevCv{max-width:100%}
 .draw-wrap{border:1px solid #ddd;border-radius:6px;background:#fafafa;margin-bottom:6px}
 #drawCv{width:100%;display:block;height:120px;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 21l5-2L20 7a2 2 0 00-3-3L5 16z' fill='%23333' stroke='%23fff' stroke-width='0.5'/><path d='M3 21l2-1-1-1z' fill='%23555'/></svg>") 3 21,crosshair}
@@ -1246,7 +1246,7 @@ button{cursor:pointer}
       <input class="name-inp" id="typeName" oninput="drawTyped()"/>
       <div class="font-row" id="fontRow"></div>
       <div class="color-row" id="tColRow"></div>
-      <div id="typePrev"><canvas id="typePrevCv" height="220"></canvas></div>
+      <div id="typePrev"><canvas id="typePrevCv" height="160"></canvas></div>
     </div>
     <div class="tp" id="tpDraw">
       <div class="color-row" id="dColRow"></div>
@@ -1528,9 +1528,9 @@ function drawTyped(){
   const name=document.getElementById('typeName').value.trim();
   const cv=document.getElementById('typePrevCv');
   const box=document.getElementById('typePrev');
-  const w=box.offsetWidth||340;cv.width=w;cv.height=220;
+  const w=box.offsetWidth||340;cv.width=w;cv.height=160;
   const ctx=cv.getContext('2d');ctx.clearRect(0,0,w,60);
-  if(name){ctx.font='130px '+S.font;ctx.fillStyle=S.color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(name,w/2,110);}
+  if(name){let fs=100;ctx.font=fs+'px '+S.font;while(ctx.measureText(name).width>w*0.88&&fs>28){fs-=4;ctx.font=fs+'px '+S.font;}const yOff=Math.round(cv.height/2+fs*0.15);ctx.fillStyle=S.color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(name,w/2,yOff);}
   chkBtn();
 }
 
