@@ -53,6 +53,23 @@ from tools.api_keys import api_keys_create, api_keys_list, api_keys_revoke
 from tools.webhooks import webhooks_config_get, webhooks_config_patch
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_real_ip(request: Request) -> str:
+    """Extract real client IP — prefers X-Forwarded-For over X-Real-IP over client.host."""
+    xff = request.headers.get('x-forwarded-for', '')
+    if xff:
+        first = xff.split(',')[0].strip()
+        if first and first != '127.0.0.1':
+            return first
+    real = request.headers.get('x-real-ip', '')
+    if real and real != '127.0.0.1':
+        return real
+    return request.client.host if request.client else 'unknown'
+
+
+# ---------------------------------------------------------------------------
 # Server init
 # ---------------------------------------------------------------------------
 
@@ -2249,7 +2266,7 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
             except Exception:
                 pass
 
-    signer_ip = request.client.host if request.client else "unknown"
+    signer_ip = _get_real_ip(request)
     signed_at = datetime.now(timezone.utc).isoformat()
     namespace = doc["namespace"]
     original_pdf = doc.get("original_pdf_path", "")
@@ -2424,7 +2441,7 @@ async def esign_decline(request: Request) -> JSONResponse:
         reason = ""
         token = ""
 
-    signer_ip = request.client.host if request.client else "unknown"
+    signer_ip = _get_real_ip(request)
 
     if token:
         signer = db.get_signer_by_token(token)

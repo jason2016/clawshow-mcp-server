@@ -135,15 +135,15 @@ p {{ line-height: 1.6; }}
 <h1>{title}</h1>
 {body_html}
 <div class="sig-block">
-  <p>Fait a : <span id="city-placeholder">___________________</span></p>
+  <p>Fait à : <span id="city-placeholder">___________________</span></p>
   <p>Le : <span id="date-placeholder">___________________</span></p>
-  <p>Mention manuscrite lu et approuve :</p>
+  <p>Mention manuscrite lu et approuvé :</p>
   <div id="lu-approuve-placeholder" style="height:50px;border-bottom:1px solid #000;width:260px;"></div>
   <p style="margin-top:16px;">Signature de {signer_name} :</p>
   <div id="signature-placeholder" style="height:80px;border-bottom:1px solid #000;width:260px;"></div>
 </div>
 <div style="margin-top:30px;font-size:9pt;color:#999;text-align:center;border-top:1px solid #eee;padding-top:8px;">
-  Document ID : {doc_id} | Signe electroniquement via ClawShow eSign | mcp.clawshow.ai
+  Document ID : {doc_id} | Signé électroniquement via ClawShow eSign | mcp.clawshow.ai
 </div>
 </body></html>"""
 
@@ -219,7 +219,15 @@ def _embed_signature_in_pdf(
 
     try:
         dt = datetime.fromisoformat(signed_at.replace("Z", "+00:00"))
-        date_str = dt.strftime("%d/%m/%Y a %H:%M UTC")
+        from zoneinfo import ZoneInfo as _ZI
+        _paris = dt.astimezone(_ZI("Europe/Paris"))
+        _utc = dt.astimezone(__import__("datetime").timezone.utc)
+        _tz = _paris.strftime("%Z")
+        date_str = (
+            f"{_paris.strftime('%d/%m/%Y')} à "
+            f"{_paris.strftime('%H:%M')} {_tz} "
+            f"({_utc.strftime('%H:%M')} UTC)"
+        )
     except Exception:
         date_str = signed_at[:10]
 
@@ -264,7 +272,7 @@ def _embed_signature_in_pdf(
     meta = (
         '<div style="margin-top:16px;padding:8px;background:#f9f9f9;border:1px solid #ddd;'
         'font-size:9pt;color:#555;font-family:Arial,sans-serif;">'
-        f'Signe electroniquement par : <strong>{signer_name}</strong> | '
+        f'Signé électroniquement par : <strong>{signer_name}</strong> | '
         f'Date : {date_str} | IP : {signer_ip} | Ville : {city}'
         '</div>'
     )
@@ -283,7 +291,7 @@ def _send_signing_email(signer_name: str, signer_email: str, signing_url: str,
         if not signer_email:
             return
         labels = {
-            "fr": ("Document a signer", "Bonjour", "Vous avez recu un document a signer.", "Signer le document"),
+            "fr": ("Document à signer", "Bonjour", "Vous avez reçu un document à signer.", "Signer le document"),
             "en": ("Document to sign", "Hello", "You have received a document to sign.", "Sign document"),
             "zh": ("请签署文件", "您好", "您收到了一份需要签署的文件。", "签署文件"),
         }.get(language, ("Document to sign", "Hello", "You have received a document to sign.", "Sign document"))
@@ -589,18 +597,18 @@ def _send_completion_email(
     try:
         if not recipient_email:
             return
-        subject = "[ClawShow eSign] Document signe par toutes les parties"
+        subject = "[ClawShow eSign] Document signé par toutes les parties"
         html = f"""<div style="max-width:520px;margin:0 auto;font-family:Arial,sans-serif;color:#333">
           <div style="background:#1a1a2e;padding:24px;text-align:center;border-radius:12px 12px 0 0">
             <h1 style="color:white;margin:0;font-size:20px">ClawShow eSign &#x2705;</h1>
           </div>
           <div style="background:white;padding:28px;border:1px solid #eee;border-top:none">
             <p>Bonjour {recipient_name},</p>
-            <p>Le document a ete signe par toutes les parties.</p>
+            <p>Le document a été signé par toutes les parties.</p>
             <div style="text-align:center;margin:28px 0">
               <a href="{signed_pdf_url}"
                  style="background:#28a745;color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-size:16px;font-weight:600">
-                Telecharger le document signe
+                Télécharger le document signé
               </a>
             </div>
             <p style="font-size:12px;color:#999">Document ID: {doc_id}</p>
@@ -617,9 +625,9 @@ def _send_expiration_email(recipient_name: str, recipient_email: str,
     try:
         if not recipient_email:
             return
-        subject = "[ClawShow eSign] Document expire" if lang == "fr" else "[ClawShow eSign] Document expired"
+        subject = "[ClawShow eSign] Document expiré" if lang == "fr" else "[ClawShow eSign] Document expiréd"
         body = (
-            f"<p>Bonjour {recipient_name},</p><p>Le document (ID: {doc_id}) a expire sans avoir ete signe par toutes les parties.</p>"
+            f"<p>Bonjour {recipient_name},</p><p>Le document (ID: {doc_id}) a expiré sans avoir été signé par toutes les parties.</p>"
             if lang == "fr" else
             f"<p>Hello {recipient_name},</p><p>Document (ID: {doc_id}) has expired without being signed by all parties.</p>"
         )
