@@ -1148,7 +1148,7 @@ button{cursor:pointer}
 .font-btn.on{border-color:#1976d2;background:#e3f2fd}
 .col-btn{width:26px;height:26px;border-radius:50%;border:2px solid transparent}
 .col-btn.on{box-shadow:0 0 0 2px #555}
-#typePrev{border:1px solid #e0e0e0;border-radius:6px;height:88px;background:#fafafa;overflow:hidden;margin-bottom:10px;display:flex;align-items:center;justify-content:center}
+#typePrev{border:1px solid #e0e0e0;border-radius:6px;height:128px;background:#fafafa;overflow:hidden;margin-bottom:10px;display:flex;align-items:center;justify-content:center}
 #typePrevCv{max-width:100%}
 .draw-wrap{border:1px solid #ddd;border-radius:6px;background:#fafafa;margin-bottom:6px}
 #drawCv{width:100%;display:block;height:120px;cursor:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M3 21l5-2L20 7a2 2 0 00-3-3L5 16z' fill='%23333' stroke='%23fff' stroke-width='0.5'/><path d='M3 21l2-1-1-1z' fill='%23555'/></svg>") 3 21,crosshair}
@@ -1421,7 +1421,7 @@ function renderZones(){
   const n=S.cur,done=!!S.paraphes[n];
   const z=document.createElement('div');
   z.className='sz '+(done?'done':'pend');
-  z.style.cssText='right:3%;bottom:1.5%;width:30%;height:12%';
+  z.style.cssText='right:3.5%;bottom:2%;width:18%;height:6%';
   if(done){const img=document.createElement('img');img.src=S.paraphes[n];z.appendChild(img);}
   else{z.innerHTML='<span class="zi">\\u270d</span><span class="zh">'+(L.zone_sign||'Signer ici')+'</span>';z.addEventListener('click',()=>zoneClick(n));}
   c.appendChild(z);
@@ -1528,9 +1528,9 @@ function drawTyped(){
   const name=document.getElementById('typeName').value.trim();
   const cv=document.getElementById('typePrevCv');
   const box=document.getElementById('typePrev');
-  const w=box.offsetWidth||340;cv.width=w;cv.height=60;
+  const w=box.offsetWidth||340;cv.width=w;cv.height=120;
   const ctx=cv.getContext('2d');ctx.clearRect(0,0,w,60);
-  if(name){ctx.font='36px '+S.font;ctx.fillStyle=S.color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(name,w/2,30);}
+  if(name){ctx.font='68px '+S.font;ctx.fillStyle=S.color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(name,w/2,60);}
   chkBtn();
 }
 
@@ -1619,7 +1619,7 @@ function attachDraw(cv,ctx,onDraw,getColor){
     const nx=(lx+x)/2,ny=(ly+y)/2;
     c.beginPath();c.moveTo(mx,my);
     c.quadraticCurveTo(lx,ly,nx,ny);
-    c.strokeStyle=getColor();c.lineWidth=2.5;c.lineCap='round';c.lineJoin='round';
+    c.strokeStyle=getColor();c.lineWidth=3.5;c.lineCap='round';c.lineJoin='round';
     c.stroke();
     mx=nx;my=ny;[lx,ly]=[x,y];
     if(cv._strokes.length)cv._strokes[cv._strokes.length-1].pts.push([x,y]);
@@ -1639,7 +1639,7 @@ function undoDraw(){
   const ctx=cv.getContext('2d');ctx.clearRect(0,0,cv.width,cv.height);
   cv._strokes.forEach(stroke=>{
     if(stroke.pts.length<2)return;
-    ctx.strokeStyle=stroke.color;ctx.lineWidth=2.5;ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.strokeStyle=stroke.color;ctx.lineWidth=3.5;ctx.lineCap='round';ctx.lineJoin='round';
     let[lx,ly]=stroke.pts[0],[pmx,pmy]=[lx,ly];
     for(let i=1;i<stroke.pts.length;i++){
       const[x,y]=stroke.pts[i],nx=(lx+x)/2,ny=(ly+y)/2;
