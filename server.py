@@ -1105,6 +1105,8 @@ button{cursor:pointer}
 .sz.pend.pulse{animation:zone-pulse .7s ease 3}
 @keyframes btn-flash{0%,100%{background:#1976d2}50%{background:#E6A817;transform:scale(1.05)}}
 .btn-pri.flash{animation:btn-flash .35s ease 3}
+@keyframes field-flash{0%,100%{box-shadow:none;border-color:transparent}25%,75%{box-shadow:0 0 0 3px rgba(230,60,60,.7);border-color:#e53935;border-radius:6px}}
+.field-flash{animation:field-flash .5s ease 3}
 .sz.pend .zh{font-size:10px;color:#c68000;font-weight:700;text-align:center;pointer-events:none;line-height:1.2}
 .sz.pend .zi{font-size:16px;pointer-events:none}
 .sz.done{border:none;background:transparent}
@@ -1264,7 +1266,9 @@ button{cursor:pointer}
       <input type="file" id="imgFile" accept=".png,.jpg,.jpeg" style="display:none" onchange="onImgFile()"/>
       <img id="imgPrev" alt=""/>
     </div>
-    <div class="legal-row"><input type="checkbox" id="legalCb" onchange="chkBtn()"/><label for="legalCb" id="legalLbl"></label></div>
+    <div style="margin:10px 0 4px 0;font-size:13px;color:#444">
+      J'ai lu et j'accepte les <a href="https://clawshow.ai/cgu" target="_blank" style="color:#1976d2;text-decoration:underline">CGU</a> et la <a href="https://clawshow.ai/confidentialite" target="_blank" style="color:#1976d2;text-decoration:underline">Politique de confidentialité</a>
+    </div>
     <div class="btn-row">
       <button class="btn-sec" id="clrBtn" onclick="clrSetup()"></button>
       <button class="btn-pri" id="btnConfirm" onclick="confirmSetup()" disabled></button>
@@ -1354,11 +1358,11 @@ const S = {
 /* ---- PROGRESS ---- */
 function reqLeft(){
   let d=Object.keys(S.paraphes).length;
-  if(S.ff.cb1)d++;if(S.ff.cb2)d++;if(S.ff.city)d++;if(S.ff.lu)d++;if(S.ff.fs)d++;
-  return (S.total+5)-d;
+  if(S.ff.cb2)d++;if(S.ff.city)d++;if(S.ff.lu)d++;if(S.ff.fs)d++;
+  return (S.total+4)-d;
 }
 function updateBar(){
-  const total=S.total+5,done=total-reqLeft();
+  const total=S.total+4,done=total-reqLeft();
   document.getElementById('progFill').style.width=Math.round(done/total*100)+'%';
   document.getElementById('reqLeftLabel').textContent=(L.req_left||'Required Fields Left')+': '+reqLeft();
   const btn=document.getElementById('btnNextField');
@@ -1371,6 +1375,14 @@ function updateBar(){
     btn.classList.remove('is-finish');
     btn.onclick=goNext;
   }
+}
+function flashField(el){
+  if(!el)return;
+  el.scrollIntoView({behavior:'smooth',block:'center'});
+  el.classList.remove('field-flash');
+  void el.offsetWidth;
+  el.classList.add('field-flash');
+  setTimeout(()=>el.classList.remove('field-flash'),1600);
 }
 function flashZone(){
   requestAnimationFrame(()=>{
@@ -1396,11 +1408,10 @@ function goNext(){
   for(let p=1;p<=S.total;p++){if(!S.paraphes[p]){gotoPage(p);flashZone();return;}}
   if(S.cur!==S.total){gotoPage(S.total);return;}
   const fs=document.getElementById('finalSec');
-  if(!S.ff.cb1){document.getElementById('cb1').focus();fs.scrollIntoView({behavior:'smooth',block:'start'});return;}
-  if(!S.ff.cb2){document.getElementById('cb2').focus();return;}
-  if(!S.ff.city){document.getElementById('cityInp').focus();return;}
-  if(!S.ff.lu){document.getElementById('luCv').scrollIntoView({behavior:'smooth',block:'center'});return;}
-  if(!S.ff.fs){document.getElementById('fsCv').scrollIntoView({behavior:'smooth',block:'center'});}
+  if(!S.ff.cb2){const el=document.getElementById('cb2');flashField(el.closest('.cbrow')||el);el.focus();return;}
+  if(!S.ff.city){const el=document.getElementById('cityInp');flashField(el.closest('.ff')||el);el.focus();return;}
+  if(!S.ff.lu){flashField(document.getElementById('luCv').closest('.ff')||document.getElementById('luCv'));return;}
+  if(!S.ff.fs){flashField(document.getElementById('fsCv').closest('.ff')||document.getElementById('fsCv'));}
 }
 
 /* ---- PAGE RENDERING ---- */
@@ -1440,8 +1451,6 @@ function zoneClick(page){
 
 /* ---- SETUP PANEL ---- */
 function openSetup(){
-  document.getElementById('legalCb').checked=false;
-  chkBtn();
   if(C.signer_name&&!document.getElementById('typeName').value)
     document.getElementById('typeName').value=C.signer_name;
   drawTyped();
@@ -1469,13 +1478,12 @@ function switchTab(t){
   chkBtn();
 }
 function chkBtn(){
-  const legal=document.getElementById('legalCb').checked;
   const act=document.querySelector('.mtab.on');
   const tid=act?act.id:'tabType';
   let has=(tid==='tabType')?document.getElementById('typeName').value.trim().length>0
          :(tid==='tabDraw')?S.drawHas
          :!!S.imgData;
-  document.getElementById('btnConfirm').disabled=!(legal&&has);
+  document.getElementById('btnConfirm').disabled=!has;
 }
 function clrSetup(){
   document.getElementById('typeName').value='';
@@ -1714,7 +1722,7 @@ function doFinish(){
   document.getElementById('btnNextField').disabled=true;
   fetch('/esign/'+C.doc_id+'/sign'+(C.token?'?token='+C.token:''),{
     method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({token:C.token,paraphes,signature_png:fsPng,lu_approuve_png:luPng,city,accept_conditions:document.getElementById("legalCb").checked,accept_email:true})
+    body:JSON.stringify({token:C.token,paraphes,signature_png:fsPng,lu_approuve_png:luPng,city,accept_conditions:document.getElementById("cb1").checked,accept_email:true})
   }).then(r=>r.json()).then(d=>{
     document.getElementById('appWrap').style.display='none';
     document.getElementById('topBar').style.display='none';
@@ -1746,7 +1754,7 @@ function setTexts(){
   document.getElementById('btnPrev').textContent='\u2190 '+(L.prev||'Pr\u00e9c\u00e9dent');
   document.getElementById('btnNext2').textContent=(L.next||'Suivant')+' \u2192';
   document.getElementById('finalH3').textContent=L.final_title||'Informations de signature';
-  document.getElementById('lb1').textContent=L.cb1||'';
+  document.getElementById('lb1').innerHTML=L.cb1||'';
   document.getElementById('lb2').textContent=L.cb2||'';
   document.getElementById('cityLbl').textContent=L.city_label||'Ville';
   document.getElementById('luLbl').textContent=L.lu_label||'Lu et approuv\u00e9';
@@ -1761,7 +1769,6 @@ function setTexts(){
   document.getElementById('typeName').placeholder=L.name_placeholder||'Votre nom';
   document.getElementById('cvHint').textContent=L.canvas_hint||'Signez avec votre doigt ou souris';
   document.getElementById('uploadTxt').textContent=L.click_upload||'Cliquer pour choisir un fichier';
-  document.getElementById('legalLbl').textContent=L.legal_label||"J'accepte que cette signature soit ma repr\u00e9sentation l\u00e9gale";
   document.getElementById('clrBtn').textContent=L.clear||'Effacer';
   document.getElementById('btnConfirm').textContent='\u270d '+(L.sign_btn||'Signer');
   document.getElementById('finH3').textContent=L.finish_confirm_title||'Confirmer la signature';
@@ -1834,7 +1841,7 @@ _LABELS = {
         "decline_reason_hint": "Motif du refus (optionnel)",
         "setup_title": "\u270d Configurez votre signature",
         "click_upload": "Cliquer pour choisir un fichier",
-        "legal_label": "J'accepte que cette signature soit ma repr\u00e9sentation l\u00e9gale",
+        "legal_label": "J'ai lu et j'accepte les <a href=\"https://clawshow.ai/cgu\" target=\"_blank\" style=\"color:#1976d2\">CGU</a> et la <a href=\"https://clawshow.ai/confidentialite\" target=\"_blank\" style=\"color:#1976d2\">Politique de confidentialit\u00e9</a>. \u2705 Valeur juridique AES (eIDAS).",
         "sign_btn": "Signer",
         "more_actions": "Plus d\u0027actions",
         "change_name": "Modifier le nom",
@@ -2330,14 +2337,14 @@ async def esign_submit_signature(request: Request) -> JSONResponse:
             logger.error("Watermark failed: %s", _wm_err)
     try:
         import sqlite3 as _sql3
-        _cdb = _sql3.connect(str(DB_PATH))
+        _cdb = _sql3.connect(str(db.DB_PATH))
         if _accept_cgu:
             _ccur = _cdb.execute(
                 "INSERT INTO esign_consents (doc_id, role, user_email, ip_address) VALUES (?, 'signer', ?, ?)",
                 (doc_id, doc.get("signer_email", ""), signer_ip)
             )
             _cdb.execute(
-                "UPDATE esign_documents SET is_production=1, signer_consent_id=? WHERE id=?",
+                "UPDATE esign_documents SET is_production=1, signer_consent_id=?, accept_conditions=1 WHERE id=?",
                 (_ccur.lastrowid, doc_id)
             )
         else:
