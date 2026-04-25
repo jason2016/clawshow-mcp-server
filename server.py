@@ -262,59 +262,82 @@ async def mock_checkout_page(request: Request) -> HTMLResponse:
 
     trigger_url = f"/api/dev/mock-payment-success/{namespace}/{order_id}" if namespace and order_id else ""
 
+    _merchant = " ".join(w.capitalize() for w in namespace.replace("-", " ").replace("_", " ").split()) if namespace else "Boutique"
+    _amount_display = f"{float(amount_str):.2f} {currency}" if amount_str else f"--- {currency}"
+    _trigger_js = f"const _r = await fetch('/api/dev/mock-payment-success/{namespace}/{order_id}', {{method: 'POST'}}); if (!_r.ok) throw new Error('trigger ' + _r.status);" if namespace and order_id else ""
+    _redirect_js = f"window.location.href = {repr(return_url)};" if return_url else "window.location.reload();"
+
     html = f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mock SumUp Checkout</title>
+  <title>Paiement &#8212; {_merchant}</title>
   <style>
-    body {{ font-family: system-ui, sans-serif; background: #f0f4f8;
-           display: flex; align-items: center; justify-content: center;
-           min-height: 100vh; margin: 0; }}
-    .card {{ background: #fff; border-radius: 16px; padding: 40px 32px;
-             max-width: 380px; width: 90%; text-align: center;
-             box-shadow: 0 4px 24px rgba(0,0,0,.12); }}
-    .badge {{ display: inline-block; background: #fff3cd; color: #856404;
-              border-radius: 8px; padding: 4px 12px; font-size: 12px;
-              font-weight: 600; margin-bottom: 20px; }}
-    .logo {{ font-size: 24px; font-weight: 800; color: #1b3b6f; margin-bottom: 8px; }}
-    .amount {{ font-size: 48px; font-weight: 700; color: #1b3b6f; margin: 16px 0; }}
-    .ref {{ font-size: 12px; color: #888; margin-bottom: 32px; }}
-    .btn {{ background: #f5a623; color: #fff; border: none; border-radius: 12px;
-            padding: 16px 32px; font-size: 18px; font-weight: 700;
-            cursor: pointer; width: 100%; transition: background .2s; }}
-    .btn:hover {{ background: #e09000; }}
-    .note {{ font-size: 11px; color: #aaa; margin-top: 16px; }}
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f7f8fa;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:16px}}
+    .header{{display:flex;align-items:center;gap:10px;margin-bottom:24px}}
+    .sumup-logo{{background:#1b3b6f;color:#fff;font-weight:800;font-size:18px;padding:6px 14px;border-radius:8px;letter-spacing:1px}}
+    .secure{{font-size:13px;color:#666}}
+    .card{{background:#fff;border-radius:16px;padding:28px 24px;max-width:400px;width:100%;box-shadow:0 2px 16px rgba(0,0,0,.08)}}
+    .merchant{{font-size:14px;color:#888;text-align:center;margin-bottom:4px}}
+    .amount{{font-size:42px;font-weight:700;color:#111;text-align:center;margin-bottom:18px}}
+    .demo-banner{{background:#fff3cd;border:1px solid #ffc107;border-radius:8px;font-size:12px;color:#856404;padding:6px 12px;text-align:center;margin-bottom:18px}}
+    .alt-pay{{display:flex;gap:10px;margin-bottom:14px}}
+    .alt-btn{{flex:1;height:44px;border-radius:8px;border:1.5px solid #ddd;background:#f0f0f0;color:#bbb;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;opacity:.5;cursor:not-allowed;user-select:none}}
+    .divider{{display:flex;align-items:center;gap:10px;margin:12px 0;color:#bbb;font-size:13px}}
+    .divider::before,.divider::after{{content:'';flex:1;height:1px;background:#e8e8e8}}
+    .field-group{{margin-bottom:12px}}
+    label{{font-size:12px;color:#666;display:block;margin-bottom:4px;font-weight:500}}
+    .field{{width:100%;padding:12px 14px;border:1.5px solid #ddd;border-radius:8px;font-size:15px;color:#333;background:#fafafa;outline:none}}
+    .field-row{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+    .btn{{width:100%;padding:15px;background:#f5a623;color:#fff;border:none;border-radius:10px;font-size:17px;font-weight:700;cursor:pointer;margin-top:6px;transition:background .15s}}
+    .btn:hover:not(:disabled){{background:#e09000}}
+    .btn:disabled{{opacity:.7;cursor:not-allowed}}
+    .footer{{font-size:11px;color:#bbb;text-align:center;margin-top:14px}}
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="badge">&#9888;&#65039; DEMO MODE</div>
-    <div class="logo">SumUp</div>
-    <div class="amount">{amount_str or "---"} {currency}</div>
-    <div class="ref">Réf: {checkout_id[:16]}</div>
-    <button class="btn" onclick="simulatePay()">💳 Simuler paiement accepté</button>
-    <div class="note">Mode mock — aucune transaction réelle</div>
+  <div class="header">
+    <span class="sumup-logo">SumUp</span>
+    <span class="secure">&#128274; Paiement s&#233;curis&#233;</span>
   </div>
+  <div class="card">
+    <div class="merchant">{_merchant}</div>
+    <div class="amount">{_amount_display}</div>
+    <div class="demo-banner">&#9888; Mode d&#233;mo &#8212; aucun paiement r&#233;el</div>
+    <div class="alt-pay">
+      <div class="alt-btn">&#63743; Apple Pay</div>
+      <div class="alt-btn">G&amp;nbsp;Google Pay</div>
+    </div>
+    <div class="divider">ou</div>
+    <div class="field-group">
+      <label>Num&#233;ro de carte</label>
+      <input class="field" type="text" value="4242 4242 4242 4242" readonly>
+    </div>
+    <div class="field-row">
+      <div class="field-group">
+        <label>Date d&#39;expiration</label>
+        <input class="field" type="text" value="12/30" readonly>
+      </div>
+      <div class="field-group">
+        <label>CVV</label>
+        <input class="field" type="text" value="123" readonly>
+      </div>
+    </div>
+    <button class="btn" id="simBtn" onclick="simulatePay()">&#128179; Simuler paiement accept&#233;</button>
+  </div>
+  <div class="footer">Mode d&#233;mo &middot; Aucun paiement r&#233;el &middot; R&#233;f: {checkout_id[:16]}</div>
   <script>
     async function simulatePay() {{
-      const btn = document.querySelector('.btn');
-      btn.disabled = true;
-      btn.textContent = '⏳ En cours...';
+      const btn = document.getElementById('simBtn');
+      btn.disabled = true; btn.textContent = 'Traitement en cours...';
       try {{
-        if ({repr(trigger_url)}) {{
-          await fetch({repr(trigger_url)}, {{method: 'POST'}});
-        }}
-        btn.textContent = '✅ Paiement accepté!';
-        btn.style.background = '#28a745';
-        setTimeout(() => {{
-          const ret = {repr(return_url)};
-          if (ret) window.location.href = ret;
-        }}, 1200);
+        {_trigger_js}
+        btn.textContent = 'Paiement accept&#233; !'; btn.style.background = '#28a745';
+        setTimeout(() => {{ {_redirect_js} }}, 1500);
       }} catch(e) {{
-        btn.textContent = '❌ Erreur — ' + e.message;
-        btn.disabled = false;
+        btn.disabled = false; btn.textContent = 'Erreur: ' + e.message; btn.style.background = '#dc3545';
       }}
     }}
   </script>
@@ -1100,6 +1123,14 @@ async def api_payment_create(request: Request) -> JSONResponse:
                     result.get("payment_id", ""),
                     ext_ref,
                 )
+                # For online mock: append query params so /mock-checkout page can show amount + trigger success
+                if result.get("is_mock") and payment_mode == "online" and result.get("payment_url"):
+                    from urllib.parse import urlencode as _urlencode
+                    _qp = {"namespace": namespace, "order_id": str(order_id), "amount": f"{amount_cents / 100:.2f}", "currency": data.get("currency", "EUR")}
+                    _ret = data.get("return_url")
+                    if _ret:
+                        _qp["return_url"] = _ret
+                    result["payment_url"] = result["payment_url"] + "?" + _urlencode(_qp)
             return JSONResponse(result)
         except Exception as e:
             _log.error(f"api_payment_create SumUp error: {e}", exc_info=True)
