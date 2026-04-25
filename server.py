@@ -368,7 +368,8 @@ async def mock_payment_success(request: Request) -> JSONResponse:
     if not result.get("success"):
         return JSONResponse({"error": result.get("error", "Order not found")}, status_code=404)
 
-    _mock_log.info(f"[MOCK] Payment success triggered: {namespace}/order {order_id}")
+    _caller_ip = request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for") or "unknown"
+    _mock_log.info(f"[MOCK] Payment success triggered: {namespace}/order {order_id} caller_ip={_caller_ip}")
     return JSONResponse({
         "success": True,
         "order_id": order_id,
