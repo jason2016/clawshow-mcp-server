@@ -594,23 +594,37 @@ def create_dine_order(namespace: str, data: dict) -> dict:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     items_json = json.dumps(data.get("items", []), ensure_ascii=False)
     order_type = data.get("order_type", "dine_in")
-    payment_method = data.get("payment_method", "online")
+    payment_method_raw = data.get("payment_method", "online")
     payment_mode = data.get("payment_mode", "")
-    # payment_mode (SumUp) takes priority; fallback to payment_method for legacy flows
+    # payment_mode (SumUp) sets all 3 payment fields; fallback to legacy for non-SumUp flows
     if payment_mode in ("in_person_solo", "in_person_caisse"):
         payment_status = "pending_sumup"
+        payment_method = "sumup_terminal"
+        payment_provider = "sumup"
     elif payment_mode == "online":
         payment_status = "pending"
+        payment_method = "sumup_online"
+        payment_provider = "sumup"
     elif payment_mode in ("cash", "at_pickup"):
         payment_status = "unpaid_order_started"
-    elif payment_method == "card_counter":
+        payment_method = "cash"
+        payment_provider = ""
+    elif payment_method_raw == "card_counter":
         payment_status = "pending_counter"
-    elif payment_method == "cash":
+        payment_method = payment_method_raw
+        payment_provider = "stancer"
+    elif payment_method_raw == "cash":
         payment_status = "pending_cash"
-    elif payment_method == "card_terminal":
+        payment_method = payment_method_raw
+        payment_provider = ""
+    elif payment_method_raw == "card_terminal":
         payment_status = "pending_terminal"
+        payment_method = payment_method_raw
+        payment_provider = "stancer"
     else:
         payment_status = "unpaid"
+        payment_method = payment_method_raw
+        payment_provider = "stancer"
 
     today = now[:10]
     with get_conn() as conn:
@@ -618,10 +632,11 @@ def create_dine_order(namespace: str, data: dict) -> dict:
         cur = conn.execute(
             """INSERT INTO dine_orders (namespace, order_number, order_type, items,
                total_amount, status, payment_status, payment_method, payment_mode,
-               created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+               payment_provider, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
             (namespace, order_number, order_type, items_json,
-             data.get("total_amount", 0), payment_status, payment_method, payment_mode, now, now),
+             data.get("total_amount", 0), payment_status, payment_method, payment_mode,
+             payment_provider, now, now),
         )
         order_id = cur.lastrowid
         # Decrement daily stock for items that have limits set
