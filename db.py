@@ -590,12 +590,20 @@ def _next_dine_order_number(conn, namespace: str) -> str:
 
 def create_dine_order(namespace: str, data: dict) -> dict:
     ensure_namespace(namespace, business_type="restaurant")
+    _ensure_sumup_schema()  # ensure payment_mode column exists before INSERT
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     items_json = json.dumps(data.get("items", []), ensure_ascii=False)
     order_type = data.get("order_type", "dine_in")
     payment_method = data.get("payment_method", "online")
-    # Determine initial payment_status based on payment method
-    if payment_method == "card_counter":
+    payment_mode = data.get("payment_mode", "")
+    # payment_mode (SumUp) takes priority; fallback to payment_method for legacy flows
+    if payment_mode in ("in_person_solo", "in_person_caisse"):
+        payment_status = "pending_sumup"
+    elif payment_mode == "online":
+        payment_status = "pending"
+    elif payment_mode in ("cash", "at_pickup"):
+        payment_status = "unpaid_order_started"
+    elif payment_method == "card_counter":
         payment_status = "pending_counter"
     elif payment_method == "cash":
         payment_status = "pending_cash"
@@ -609,10 +617,11 @@ def create_dine_order(namespace: str, data: dict) -> dict:
         order_number = _next_dine_order_number(conn, namespace)
         cur = conn.execute(
             """INSERT INTO dine_orders (namespace, order_number, order_type, items,
-               total_amount, status, payment_status, payment_method, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
+               total_amount, status, payment_status, payment_method, payment_mode,
+               created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
             (namespace, order_number, order_type, items_json,
-             data.get("total_amount", 0), payment_status, payment_method, now, now),
+             data.get("total_amount", 0), payment_status, payment_method, payment_mode, now, now),
         )
         order_id = cur.lastrowid
         # Decrement daily stock for items that have limits set
