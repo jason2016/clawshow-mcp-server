@@ -331,13 +331,30 @@ async def mock_checkout_page(request: Request) -> HTMLResponse:
   <script>
     async function simulatePay() {{
       const btn = document.getElementById('simBtn');
-      btn.disabled = true; btn.textContent = 'Traitement en cours...';
+      btn.disabled = true;
+      btn.textContent = 'Traitement en cours...';
       try {{
-        {_trigger_js}
-        btn.textContent = 'Paiement accept&#233; !'; btn.style.background = '#28a745';
-        setTimeout(() => {{ {_redirect_js} }}, 1500);
+        const params = new URLSearchParams(window.location.search);
+        const ns  = params.get('namespace');
+        const oid = params.get('order_id');
+        const ret = params.get('return_url');
+        if (ns && oid) {{
+          const r = await fetch('/api/dev/mock-payment-success/' + ns + '/' + oid, {{method: 'POST'}});
+          if (!r.ok) throw new Error('mock-trigger HTTP ' + r.status);
+        }}
+        btn.textContent = 'Paiement accepté !';
+        btn.style.background = '#28a745';
+        setTimeout(() => {{
+          if (ret) {{
+            window.location.href = ret;
+          }} else {{
+            btn.textContent = 'Paiement accepté — return_url manquant';
+          }}
+        }}, 1200);
       }} catch(e) {{
-        btn.disabled = false; btn.textContent = 'Erreur: ' + e.message; btn.style.background = '#dc3545';
+        btn.disabled = false;
+        btn.textContent = 'Erreur : ' + e.message;
+        btn.style.background = '#dc3545';
       }}
     }}
   </script>
