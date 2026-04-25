@@ -25,6 +25,17 @@ from typing import Callable
 
 import requests
 
+# SumUp adapter (Phase 1 mock support)
+from adapters.sumup import (
+    SumUpClient,
+    SumUpCheckoutOptions,
+    ReaderCheckoutOptions,
+    ExternalSaleOptions,
+    create_hosted_checkout,
+    create_checkout_on_reader,
+    create_external_sale,
+)
+
 
 # ---------------------------------------------------------------------------
 # Per-namespace payment config
@@ -142,6 +153,28 @@ def _create_sumup_payment(
     return_url: str | None,
     metadata: dict | None,
 ) -> dict:
+    # Phase 1: Mock mode intercept — no real API call in mock mode
+    _sumup_mode = os.getenv("SUMUP_MODE", "mock")
+    if _sumup_mode == "mock":
+        from adapters.sumup.mock_responses import generate_mock_response
+        _amount_dec = round(amount / 100, 2)
+        _ref = str((metadata or {}).get("order_id") or uuid.uuid4())
+        _mock = generate_mock_response("/checkouts", {
+            "amount": _amount_dec,
+            "currency": currency.upper(),
+            "checkout_reference": _ref,
+        }, "POST")
+        return {
+            "success": True,
+            "payment_id": _mock["id"],
+            "payment_url": _mock.get("hosted_checkout_url", ""),
+            "provider": "sumup",
+            "amount": amount,
+            "currency": currency.lower(),
+            "status": "pending",
+            "is_mock": True,
+        }
+
     secret_key, merchant_code = _get_sumup_keys(namespace)
     if not secret_key:
         return {"success": False, "error": "SUMUP_SECRET_KEY not configured"}
@@ -192,6 +225,139 @@ def _create_sumup_payment(
         "status": "pending",
     }
 
+
+
+# ---------------------------------------------------------------------------
+# SumUp — extended payment modes (Phase 1 mock + Phase 2 live)
+# ---------------------------------------------------------------------------
+
+def _create_sumup_by_mode(
+    namespace: str,
+    amount: int,        # cents
+    currency: str,
+    description: str,
+    payment_mode: str,
+    device_id: str | None = None,
+    return_url: str | None = None,
+    external_reference: str | None = None,
+    items: list | None = None,
+) -> dict:
+    """
+    Route to the correct SumUp flow based on payment_mode.
+
+    Modes:
+      cash           — no payment provider, return awaiting_cash status
+      online         — SumUp Hosted Checkout (link)
+      in_person_solo — SumUp Cloud API (Solo TPE)
+      in_person_caisse — SumUp External Sale (Caisse screen)
+    """
+    import time
+
+    sumup_mode = os.getenv("SUMUP_MODE", "mock")
+    api_key = os.getenv("SUMUP_API_KEY", "")
+    ext_ref = external_reference or f"nr-{int(time.time())}"
+    # SumUp uses decimal euros, not cents
+    amount_euros = round(amount / 100, 2)
+
+    if payment_mode == "cash":
+        return {
+            "success": True,
+            "payment_mode": "cash",
+            "status": "awaiting_cash",
+            "external_reference": ext_ref,
+            "message": "Order created, payment to be collected in person",
+        }
+
+    client = SumUpClient(api_key=api_key, mode=sumup_mode)
+    fallback_url = return_url or f"https://mcp.clawshow.ai/webhook/{namespace}/sumup"
+
+    try:
+        if payment_mode == "online":
+            result = create_hosted_checkout(
+                client,
+                SumUpCheckoutOptions(
+                    amount=amount_euros,
+                    currency=currency,
+                    checkout_reference=ext_ref,
+                    pay_to_email=os.getenv("SUMUP_MERCHANT_EMAIL", ""),
+                    return_url=fallback_url,
+                ),
+            )
+            return {
+                "success": True,
+                "payment_mode": "online",
+                "provider": "sumup",
+                "payment_id": result["checkout_id"],
+                "payment_url": result.get("hosted_checkout_url", ""),
+                "status": "pending",
+                "external_reference": ext_ref,
+                "is_mock": result["is_mock"],
+                "amount": amount,
+                "currency": currency.lower(),
+            }
+
+        if payment_mode == "in_person_solo":
+            reader_id = device_id or os.getenv("SUMUP_READER_ID", "mock_reader_001")
+            result = create_checkout_on_reader(
+                client,
+                ReaderCheckoutOptions(
+                    reader_id=reader_id,
+                    amount=amount_euros,
+                    currency=currency,
+                    description=description or f"Order {ext_ref}",
+                    return_url=fallback_url,
+                ),
+            )
+            return {
+                "success": True,
+                "payment_mode": "in_person_solo",
+                "provider": "sumup",
+                "payment_id": result["checkout_id"],
+                "status": result["status"],
+                "reader_id": result["reader_id"],
+                "external_reference": ext_ref,
+                "is_mock": result["is_mock"],
+                "amount": amount,
+                "currency": currency.lower(),
+            }
+
+        if payment_mode == "in_person_caisse":
+            outlet_id = device_id or os.getenv("SUMUP_OUTLET_ID", "mock_outlet_001")
+            result = create_external_sale(
+                client,
+                ExternalSaleOptions(
+                    outlet_id=outlet_id,
+                    items=items or [],
+                    total_amount=amount_euros,
+                    currency=currency,
+                    external_reference=ext_ref,
+                ),
+            )
+            return {
+                "success": True,
+                "payment_mode": "in_person_caisse",
+                "provider": "sumup",
+                "payment_id": result["sale_id"],
+                "status": result["status"],
+                "external_reference": ext_ref,
+                "is_mock": result["is_mock"],
+                "amount": amount,
+                "currency": currency.lower(),
+            }
+
+    except Exception as e:
+        # Fallback to Stancer on SumUp failure
+        import logging
+        logging.getLogger(__name__).error(f"SumUp {payment_mode} failed, fallback to Stancer: {e}", exc_info=True)
+        fallback = _create_stancer_payment(
+            namespace, amount, currency, description, return_url
+        )
+        if fallback.get("success"):
+            fallback["_sumup_fallback"] = True
+            fallback["_sumup_error"] = str(e)
+        return fallback
+
+    return {"success": False, "error": f"Unknown payment_mode: {payment_mode}"}
 
 # ---------------------------------------------------------------------------
 # Stripe
@@ -325,29 +491,50 @@ def register(mcp, record_call: Callable) -> None:
         namespace: str,
         return_url: str = "",
         metadata: dict | None = None,
+        payment_mode: str = "",
+        device_id: str = "",
+        external_reference: str = "",
+        items: list | None = None,
     ) -> str:
         """
-        Generate a hosted payment link for any business scenario: rent collection,
-        tuition fees, restaurant orders, invoices, e-commerce, donations, or service
-        payments. Supports 3 payment providers: Stripe (global), Stancer (France,
-        lowest fees), SumUp (Europe). Accepts Apple Pay, Google Pay, CB, Visa,
-        Mastercard, SEPA. Input: amount, currency, provider, description, namespace.
-        Output: ready-to-share payment URL. No signup required — works on first call.
-        Payment status trackable via verify_payment tool.
+        Generate a payment for any business scenario: restaurant orders, rent, tuition,
+        invoices, e-commerce. Supports Stripe (global), Stancer (France), SumUp (Europe).
+        For SumUp, supports 4 payment modes: online (hosted checkout link), in_person_solo
+        (Solo TPE terminal), in_person_caisse (Caisse screen push), cash (no payment needed).
 
         Args:
-            provider:    Payment gateway — "stancer", "sumup", or "stripe"
-            amount:      Amount in cents (e.g. 1050 for €10.50)
-            currency:    ISO currency code, e.g. "eur"
-            description: Payment description shown on the payment page
-            namespace:   Client namespace for config routing (e.g. "neige-rouge", "florent")
-            return_url:  Optional URL to redirect after payment
-            metadata:    Optional dict with order_id, customer_name, etc.
+            provider:           Payment gateway — "stancer", "sumup", or "stripe"
+            amount:             Amount in cents (e.g. 1050 for €10.50)
+            currency:           ISO currency code, e.g. "eur"
+            description:        Payment description shown on the payment page
+            namespace:          Client namespace (e.g. "neige-rouge", "florent")
+            return_url:         Optional redirect URL after payment
+            metadata:           Optional dict with order_id, customer_name, etc.
+            payment_mode:       SumUp mode — "online", "in_person_solo", "in_person_caisse", "cash"
+                                (only used when provider="sumup")
+            device_id:          SumUp reader_id or outlet_id for in-person modes
+            external_reference: Order ID to track in webhook callbacks
+            items:              Line items for in_person_caisse mode
 
         Returns:
             JSON string with payment_url, payment_id, provider, amount, currency, status.
         """
         record_call("generate_payment", {"provider": provider, "namespace": namespace})
+
+        # SumUp with explicit payment_mode — use extended adapter
+        if provider == "sumup" and payment_mode:
+            result = _create_sumup_by_mode(
+                namespace=namespace,
+                amount=amount,
+                currency=currency,
+                description=description,
+                payment_mode=payment_mode,
+                device_id=device_id or None,
+                return_url=return_url or None,
+                external_reference=external_reference or None,
+                items=items,
+            )
+            return json.dumps(result, ensure_ascii=False)
 
         if provider == "stancer":
             result = _create_stancer_payment(

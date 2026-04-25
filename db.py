@@ -1320,3 +1320,96 @@ def is_otp_locked(document_id: str, signer_id: int) -> dict:
     if row:
         return {"locked": True, "locked_until": row[0]}
     return {"locked": False}
+
+
+# ---------------------------------------------------------------------------
+# SumUp Schema + Webhook Logs (added 2026-04-25)
+# ---------------------------------------------------------------------------
+
+def _ensure_sumup_schema() -> None:
+    """Lazy migration: add SumUp columns to dine_orders + create webhook_logs table."""
+    with get_conn() as conn:
+        # dine_orders: add payment_mode
+        try:
+            conn.execute("SELECT payment_mode FROM dine_orders LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE dine_orders ADD COLUMN payment_mode TEXT DEFAULT ''")
+
+        # dine_orders: add sumup_checkout_id
+        try:
+            conn.execute("SELECT sumup_checkout_id FROM dine_orders LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE dine_orders ADD COLUMN sumup_checkout_id TEXT DEFAULT ''")
+
+        # dine_orders: add sumup_external_id
+        try:
+            conn.execute("SELECT sumup_external_id FROM dine_orders LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE dine_orders ADD COLUMN sumup_external_id TEXT DEFAULT ''")
+
+        # webhook_logs table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS webhook_logs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                namespace       TEXT NOT NULL,
+                provider        TEXT NOT NULL,
+                event_type      TEXT,
+                payload         TEXT,
+                signature_valid BOOLEAN DEFAULT 1,
+                processed       BOOLEAN DEFAULT 1,
+                is_mock         BOOLEAN DEFAULT 0,
+                created_at      DATETIME DEFAULT (datetime('now'))
+            )
+        """)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_logs_namespace ON webhook_logs(namespace)")
+        except Exception:
+            pass
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_payment_mode ON dine_orders(payment_mode)")
+        except Exception:
+            pass
+
+
+def write_webhook_log(
+    namespace: str,
+    provider: str,
+    event_type: str,
+    payload: str,
+    signature_valid: bool = True,
+    processed: bool = True,
+    is_mock: bool = False,
+) -> dict:
+    """Write inbound webhook event to audit log."""
+    _ensure_sumup_schema()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO webhook_logs
+               (namespace, provider, event_type, payload, signature_valid, processed, is_mock)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (namespace, provider, event_type, payload, int(signature_valid), int(processed), int(is_mock)),
+        )
+    return {"success": True, "log_id": cur.lastrowid}
+
+
+def update_dine_order_sumup(
+    namespace: str,
+    order_id: int,
+    payment_mode: str,
+    sumup_checkout_id: str,
+    sumup_external_id: str,
+) -> dict:
+    """Record SumUp checkout details on a dine order."""
+    _ensure_sumup_schema()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with get_conn() as conn:
+        cur = conn.execute(
+            """UPDATE dine_orders
+               SET payment_mode=?, sumup_checkout_id=?, sumup_external_id=?,
+                   payment_provider='sumup', updated_at=?
+               WHERE id=? AND namespace=?""",
+            (payment_mode, sumup_checkout_id, sumup_external_id, now, order_id, namespace),
+        )
+        if cur.rowcount == 0:
+            return {"success": False, "error": f"Order {order_id} not found"}
+    return {"success": True, "order_id": order_id}

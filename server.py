@@ -182,6 +182,100 @@ async def stats(request: Request) -> JSONResponse:
 PAYMENTS_DIR = Path(__file__).parent / "data" / "payments"
 
 
+
+
+async def sumup_webhook_handler(request: Request) -> JSONResponse:
+    """POST /webhook/{namespace}/sumup — inbound SumUp payment webhook."""
+    namespace = request.path_params.get("namespace", "")
+    try:
+        raw_body = await request.body()
+        parsed = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid payload"}, status_code=400)
+
+    signature = request.headers.get("x-sumup-signature", "")
+    webhook_secret = _os.environ.get("SUMUP_WEBHOOK_SECRET", "mock_secret_for_demo")
+
+    from adapters.sumup.webhook import handle_sumup_webhook
+    result = handle_sumup_webhook(
+        namespace=namespace,
+        raw_payload=raw_body,
+        parsed_body=parsed,
+        signature=signature or None,
+        webhook_secret=webhook_secret,
+    )
+
+    status_code = result.pop("_status", 200)
+    return JSONResponse(result, status_code=status_code)
+
+
+
+
+async def api_order_status(request: Request) -> JSONResponse:
+    """GET /api/order/{id}/status?namespace=x — get payment status of a dine order."""
+    order_id_str = request.path_params.get("id", "")
+    namespace = request.query_params.get("namespace", "")
+    if not namespace:
+        return JSONResponse({"error": "namespace required"}, status_code=400)
+    try:
+        order_id = int(order_id_str)
+    except ValueError:
+        return JSONResponse({"error": "order_id must be integer"}, status_code=400)
+
+    with db.get_conn() as _conn:
+        row = _conn.execute(
+            """SELECT id, order_number, payment_status, payment_mode, payment_id,
+                      payment_provider, sumup_checkout_id, sumup_external_id, updated_at
+               FROM dine_orders WHERE id=? AND namespace=?""",
+            (order_id, namespace),
+        ).fetchone()
+    if not row:
+        return JSONResponse({"error": "Order not found"}, status_code=404)
+
+    return JSONResponse({
+        "id": row["id"],
+        "order_number": row["order_number"],
+        "payment_status": row["payment_status"],
+        "payment_mode": row["payment_mode"],
+        "payment_provider": row["payment_provider"] or "stancer",
+        "payment_id": row["payment_id"],
+        "sumup_checkout_id": row["sumup_checkout_id"],
+        "updated_at": row["updated_at"],
+    })
+
+async def mock_payment_success(request: Request) -> JSONResponse:
+    """POST /api/dev/mock-payment-success/{namespace}/{order_id}
+
+    Demo trigger: manually mark an order as paid (mock mode only).
+    Used for recording demo videos — simulates a customer tapping the terminal.
+    """
+    if _os.environ.get("SUMUP_MODE", "mock") != "mock":
+        return JSONResponse({"error": "Only available in mock mode"}, status_code=403)
+
+    namespace = request.path_params.get("namespace", "")
+    order_id_str = request.path_params.get("order_id", "")
+    try:
+        order_id = int(order_id_str)
+    except ValueError:
+        return JSONResponse({"error": "order_id must be an integer"}, status_code=400)
+
+    import logging as _log_mod
+    _mock_log = _log_mod.getLogger("mock_payment_success")
+
+    result = db.update_dine_order_payment_status(namespace, order_id, "paid")
+    if not result.get("success"):
+        return JSONResponse({"error": result.get("error", "Order not found")}, status_code=404)
+
+    _mock_log.info(f"[MOCK] Payment success triggered: {namespace}/order {order_id}")
+    return JSONResponse({
+        "success": True,
+        "order_id": order_id,
+        "namespace": namespace,
+        "payment_status": "paid",
+        "mock": True,
+    })
+
+
 async def mollie_webhook(request: Request) -> JSONResponse:
     """
     POST /webhooks/mollie
@@ -877,17 +971,63 @@ import requests as _req_lib
 import os as _os
 
 async def api_payment_create(request: Request) -> JSONResponse:
-    """POST /api/payment/create — create a Stancer payment for a dine order."""
+    """POST /api/payment/create — create a payment for a dine order (Stancer or SumUp)."""
     try:
         data = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
     namespace = data.get("namespace", "")
-    amount = data.get("amount", 0)       # in cents
-    description = data.get("description", "Commande Neige Rouge")
     order_id = data.get("order_id")
-    if not namespace or not amount or not order_id:
-        return JSONResponse({"error": "namespace, amount, order_id required"}, status_code=400)
+    payment_mode = (data.get("payment_mode") or "").strip()
+    amount_raw = data.get("amount", 0)
+    description = data.get("description", "Commande Neige Rouge")
+
+    if not namespace or not order_id:
+        return JSONResponse({"error": "namespace, order_id required"}, status_code=400)
+    if not amount_raw and payment_mode != "cash":
+        return JSONResponse({"error": "amount required"}, status_code=400)
+
+    # SumUp path — triggered by explicit payment_mode
+    if payment_mode:
+        import logging as _logging
+        _log = _logging.getLogger("api_payment_create")
+        try:
+            from tools.payment import _create_sumup_by_mode
+            # amount: PWA can pass euros (float) or cents (int) — normalize to cents
+            if isinstance(amount_raw, float) or (isinstance(amount_raw, (int, float)) and amount_raw < 500):
+                amount_cents = int(round(float(amount_raw) * 100))
+            else:
+                amount_cents = int(amount_raw)
+            ext_ref = str(order_id)
+            result = _create_sumup_by_mode(
+                namespace=namespace,
+                amount=amount_cents,
+                currency=data.get("currency", "EUR"),
+                description=description,
+                payment_mode=payment_mode,
+                device_id=data.get("device_id") or None,
+                return_url=data.get("return_url") or None,
+                external_reference=ext_ref,
+                items=data.get("items"),
+            )
+            if result.get("success"):
+                # Record on order
+                db._ensure_sumup_schema()
+                db.update_dine_order_sumup(
+                    namespace,
+                    int(order_id),
+                    payment_mode,
+                    result.get("payment_id", ""),
+                    ext_ref,
+                )
+            return JSONResponse(result)
+        except Exception as e:
+            _log.error(f"api_payment_create SumUp error: {e}", exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=502)
+
+    # Stancer path (existing behavior, preserved)
+    amount = amount_raw
     stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
     stancer_pub = _os.environ.get("STANCER_PUBLIC_KEY", "")
     if not stancer_key or stancer_key.startswith("stest_your"):
@@ -2220,7 +2360,7 @@ async def esign_user_create(request: Request) -> JSONResponse:
     namespace = "user_" + str(user["id"])
     doc_id = _next_doc_id(namespace)
 
-    esign_dir = _Path("/opt/clawshow-mcp-server/data/esign") / namespace
+    esign_dir = ESIGN_DATA_DIR / namespace
     esign_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = str(esign_dir / (doc_id + ".pdf"))
 
@@ -2235,19 +2375,20 @@ async def esign_user_create(request: Request) -> JSONResponse:
         total_pages = 1
 
     loop = _aio.get_event_loop()
-    await loop.run_in_executor(None, _generate_page_images, pdf_path, doc_id, namespace)
+    pages_dir = str(ESIGN_DATA_DIR / namespace / (doc_id + "_pages"))
+    await loop.run_in_executor(None, _generate_page_images, pdf_path, pages_dir)
 
     signer_token = _sec.token_urlsafe(32)
 
     with db.get_conn() as conn:
         conn.execute(
             "INSERT INTO esign_documents "
-            "(id, namespace, status, signer_name, signer_email, template, total_pages, pdf_path, creator_user_id) "
+            "(id, namespace, status, signer_name, signer_email, template, total_pages, original_pdf_path, creator_user_id) "
             "VALUES (?, ?, 'pending', ?, ?, 'upload', ?, ?, ?)",
-            (doc_id, namespace, signer_name, signer_email, "upload", total_pages, pdf_path, user["id"]),
+            (doc_id, namespace, signer_name, signer_email, total_pages, pdf_path, user["id"]),
         )
         conn.execute(
-            "INSERT INTO esign_signers (document_id, signer_name, signer_email, token, order_num) "
+            "INSERT INTO esign_signers (document_id, signer_name, signer_email, token, signing_order) "
             "VALUES (?, ?, ?, ?, 1)",
             (doc_id, signer_name, signer_email, signer_token),
         )
@@ -3510,6 +3651,8 @@ def _build_app() -> Starlette:
             Route("/docs/esign-api-reference.md", serve_docs_esign_md, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
+            Route("/webhook/{namespace}/sumup", sumup_webhook_handler, methods=["POST"]),
+            Route("/api/dev/mock-payment-success/{namespace}/{order_id}", mock_payment_success, methods=["POST"]),
             Route("/webhooks/mollie", mollie_webhook, methods=["POST"]),
             Route("/webhooks/stripe", stripe_billing_webhook, methods=["POST"]),
             Route("/webhooks/esign", billing_esign_webhook, methods=["POST"]),
@@ -3531,6 +3674,7 @@ def _build_app() -> Starlette:
             Route("/api/order/{id:int}/mark-printed", api_order_mark_printed, methods=["PATCH"]),
             Route("/api/payment/create", api_payment_create, methods=["POST"]),
             Route("/api/payment/verify", api_payment_verify, methods=["GET"]),
+            Route("/api/order/{id:int}/status", api_order_status, methods=["GET"]),
             Route("/esign-documents/recent", esign_documents_recent, methods=["GET"]),
             # eSign user portal (esign.clawshow.ai)
             Route("/signup", page_signup, methods=["GET"]),
