@@ -21,7 +21,7 @@ def generate_mock_response(
             "amount": data.get("amount") if data else 0,
             "currency": data.get("currency", "EUR") if data else "EUR",
             "checkout_reference": data.get("checkout_reference", "") if data else "",
-            "hosted_checkout_url": f"https://demo.clawshow.ai/mock-sumup-checkout/{checkout_id}",
+            "hosted_checkout_url": f"https://mcp.clawshow.ai/mock-checkout/{checkout_id}",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "_mock": True,
         }

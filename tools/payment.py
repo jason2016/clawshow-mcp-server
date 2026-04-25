@@ -259,10 +259,10 @@ def _create_sumup_by_mode(
     # SumUp uses decimal euros, not cents
     amount_euros = round(amount / 100, 2)
 
-    if payment_mode == "cash":
+    if payment_mode in ("cash", "at_pickup"):
         return {
             "success": True,
-            "payment_mode": "cash",
+            "payment_mode": payment_mode,
             "status": "awaiting_cash",
             "external_reference": ext_ref,
             "message": "Order created, payment to be collected in person",

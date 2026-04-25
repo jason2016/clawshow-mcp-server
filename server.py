@@ -243,6 +243,85 @@ async def api_order_status(request: Request) -> JSONResponse:
         "updated_at": row["updated_at"],
     })
 
+
+
+async def mock_checkout_page(request: Request) -> HTMLResponse:
+    """GET /mock-checkout/{checkout_id}?return_url=...&namespace=...&order_id=...
+    Demo checkout page for SumUp mock mode. Shows amount + yellow [模拟支付成功] button.
+    Only served when SUMUP_MODE=mock.
+    """
+    if _os.environ.get("SUMUP_MODE", "mock") != "mock":
+        return JSONResponse({"error": "Not available in live mode"}, status_code=403)
+
+    checkout_id = request.path_params.get("checkout_id", "")
+    return_url = request.query_params.get("return_url", "")
+    namespace = request.query_params.get("namespace", "")
+    order_id = request.query_params.get("order_id", "")
+    amount_str = request.query_params.get("amount", "")
+    currency = request.query_params.get("currency", "EUR")
+
+    trigger_url = f"/api/dev/mock-payment-success/{namespace}/{order_id}" if namespace and order_id else ""
+
+    html = f"""<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mock SumUp Checkout</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; background: #f0f4f8;
+           display: flex; align-items: center; justify-content: center;
+           min-height: 100vh; margin: 0; }}
+    .card {{ background: #fff; border-radius: 16px; padding: 40px 32px;
+             max-width: 380px; width: 90%; text-align: center;
+             box-shadow: 0 4px 24px rgba(0,0,0,.12); }}
+    .badge {{ display: inline-block; background: #fff3cd; color: #856404;
+              border-radius: 8px; padding: 4px 12px; font-size: 12px;
+              font-weight: 600; margin-bottom: 20px; }}
+    .logo {{ font-size: 24px; font-weight: 800; color: #1b3b6f; margin-bottom: 8px; }}
+    .amount {{ font-size: 48px; font-weight: 700; color: #1b3b6f; margin: 16px 0; }}
+    .ref {{ font-size: 12px; color: #888; margin-bottom: 32px; }}
+    .btn {{ background: #f5a623; color: #fff; border: none; border-radius: 12px;
+            padding: 16px 32px; font-size: 18px; font-weight: 700;
+            cursor: pointer; width: 100%; transition: background .2s; }}
+    .btn:hover {{ background: #e09000; }}
+    .note {{ font-size: 11px; color: #aaa; margin-top: 16px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">&#9888;&#65039; DEMO MODE</div>
+    <div class="logo">SumUp</div>
+    <div class="amount">{amount_str or "---"} {currency}</div>
+    <div class="ref">Réf: {checkout_id[:16]}</div>
+    <button class="btn" onclick="simulatePay()">💳 Simuler paiement accepté</button>
+    <div class="note">Mode mock — aucune transaction réelle</div>
+  </div>
+  <script>
+    async function simulatePay() {{
+      const btn = document.querySelector('.btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ En cours...';
+      try {{
+        if ({repr(trigger_url)}) {{
+          await fetch({repr(trigger_url)}, {{method: 'POST'}});
+        }}
+        btn.textContent = '✅ Paiement accepté!';
+        btn.style.background = '#28a745';
+        setTimeout(() => {{
+          const ret = {repr(return_url)};
+          if (ret) window.location.href = ret;
+        }}, 1200);
+      }} catch(e) {{
+        btn.textContent = '❌ Erreur — ' + e.message;
+        btn.disabled = false;
+      }}
+    }}
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(html)
+
 async def mock_payment_success(request: Request) -> JSONResponse:
     """POST /api/dev/mock-payment-success/{namespace}/{order_id}
 
@@ -3651,6 +3730,7 @@ def _build_app() -> Starlette:
             Route("/docs/esign-api-reference.md", serve_docs_esign_md, methods=["GET"]),
             Route("/stats", stats, methods=["GET"]),
             Route("/webhook/stripe", stripe_webhook, methods=["POST"]),
+            Route("/mock-checkout/{checkout_id}", mock_checkout_page, methods=["GET"]),
             Route("/webhook/{namespace}/sumup", sumup_webhook_handler, methods=["POST"]),
             Route("/api/dev/mock-payment-success/{namespace}/{order_id}", mock_payment_success, methods=["POST"]),
             Route("/webhooks/mollie", mollie_webhook, methods=["POST"]),

@@ -1392,6 +1392,16 @@ def write_webhook_log(
     return {"success": True, "log_id": cur.lastrowid}
 
 
+# payment_mode → initial payment_status mapping
+_SUMUP_PAYMENT_STATUS = {
+    "in_person_solo":   "pending_sumup",
+    "in_person_caisse": "pending_sumup",
+    "online":           "pending",
+    "cash":             "unpaid_order_started",
+    "at_pickup":        "unpaid_order_started",
+}
+
+
 def update_dine_order_sumup(
     namespace: str,
     order_id: int,
@@ -1399,17 +1409,19 @@ def update_dine_order_sumup(
     sumup_checkout_id: str,
     sumup_external_id: str,
 ) -> dict:
-    """Record SumUp checkout details on a dine order."""
+    """Record SumUp checkout details on a dine order, and set correct payment_status."""
     _ensure_sumup_schema()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Derive expected payment_status from payment_mode
+    new_status = _SUMUP_PAYMENT_STATUS.get(payment_mode, "pending_sumup")
     with get_conn() as conn:
         cur = conn.execute(
             """UPDATE dine_orders
                SET payment_mode=?, sumup_checkout_id=?, sumup_external_id=?,
-                   payment_provider='sumup', updated_at=?
+                   payment_provider='sumup', payment_status=?, updated_at=?
                WHERE id=? AND namespace=?""",
-            (payment_mode, sumup_checkout_id, sumup_external_id, now, order_id, namespace),
+            (payment_mode, sumup_checkout_id, sumup_external_id, new_status, now, order_id, namespace),
         )
         if cur.rowcount == 0:
             return {"success": False, "error": f"Order {order_id} not found"}
-    return {"success": True, "order_id": order_id}
+    return {"success": True, "order_id": order_id, "payment_status": new_status}
