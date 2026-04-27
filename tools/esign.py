@@ -432,11 +432,89 @@ def register(mcp, record_call: Callable) -> None:
 # V2: Multi-page overlay + school counter-sign
 
 _DEFAULT_SIG_POSITIONS = {
-    "paraphe":   {"x": 397, "y": 40, "w": 130, "h": 26},
-    "final_lu":  {"x": 90,  "y": 130, "w": 220, "h": 38},
+    "paraphe":   {"x": 397, "y": 40, "w": 130, "h": 45},
+    "final_lu":  {"x": 90,  "y": 130, "w": 220, "h": 55},
     "final_sig": {"x": 90,  "y": 70,  "w": 220, "h": 70},
     "school_sig":{"x": 330, "y": 30,  "w": 200, "h": 70},
 }
+
+
+def _build_signature_certificate_page(final_sig: dict, school_sig: dict = None):
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib.utils import ImageReader
+    from PyPDF2 import PdfReader
+    import io as _io
+
+    sf = final_sig
+    W, H = 595, 842
+    packet = _io.BytesIO()
+    c = rl_canvas.Canvas(packet, pagesize=(W, H))
+
+    c.setFillColorRGB(0.098, 0.463, 0.824)
+    c.rect(0, H - 55, W, 55, fill=1, stroke=0)
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont('Helvetica-Bold', 13)
+    c.drawString(30, H - 34, 'ClawShow eSign — Certificat de Signature')
+
+    y = H - 80
+    c.setFillColorRGB(0.15, 0.15, 0.15)
+    c.setFont('Helvetica-Bold', 10)
+    c.drawString(30, y, 'Signataire / Signer')
+    y -= 16
+    c.setFont('Helvetica', 10)
+    city = sf.get('city', '')
+    date = sf.get('signed_at', '')[:10]
+    c.drawString(30, y, f"Nom / Name : {sf.get('signer_name', '')}")
+    y -= 14
+    c.drawString(30, y, f"Fait à / Signed in : {city}   |   Date : {date}")
+    y -= 14
+    c.drawString(30, y, f"Adresse IP : {sf.get('signer_ip', '')}")
+    y -= 22
+
+    c.setStrokeColorRGB(0.85, 0.85, 0.85)
+    c.line(30, y, W - 30, y)
+    y -= 18
+
+    if sf.get('lu_bytes'):
+        c.setFillColorRGB(0.15, 0.15, 0.15)
+        c.setFont('Helvetica-Bold', 10)
+        c.drawString(30, y, 'Lu et approuvé / Read and Approved:')
+        y -= 8
+        box_h = 50
+        c.setStrokeColorRGB(0.75, 0.75, 0.75)
+        c.rect(30, y - box_h, 260, box_h, stroke=1, fill=0)
+        c.drawImage(ImageReader(_io.BytesIO(sf['lu_bytes'])), 32, y - box_h + 2, width=256, height=box_h - 4, mask='auto', preserveAspectRatio=True)
+        y -= box_h + 18
+
+    c.setFillColorRGB(0.15, 0.15, 0.15)
+    c.setFont('Helvetica-Bold', 10)
+    c.drawString(30, y, 'Signature électronique / Electronic Signature:')
+    y -= 8
+    sig_h = 90
+    c.setStrokeColorRGB(0.75, 0.75, 0.75)
+    c.rect(30, y - sig_h, 280, sig_h, stroke=1, fill=0)
+    c.drawImage(ImageReader(_io.BytesIO(sf['sig_bytes'])), 32, y - sig_h + 2, width=276, height=sig_h - 4, mask='auto', preserveAspectRatio=True)
+    y -= sig_h + 18
+
+    if school_sig and school_sig.get('sig_bytes'):
+        c.setFont('Helvetica-Bold', 10)
+        c.drawString(30, y, 'Contre-signature école:')
+        y -= 8
+        sc_h = 70
+        c.rect(30, y - sc_h, 260, sc_h, stroke=1, fill=0)
+        c.drawImage(ImageReader(_io.BytesIO(school_sig['sig_bytes'])), 32, y - sc_h + 2, width=256, height=sc_h - 4, mask='auto', preserveAspectRatio=True)
+
+    doc_id = sf.get('doc_id', '')
+    ts = sf.get('signed_at', '')[:19].replace('T', ' ')
+    mcp_base = os.getenv('MCP_BASE_URL', 'https://mcp.clawshow.ai')
+    c.setFont('Helvetica', 7)
+    c.setFillColorRGB(0.45, 0.45, 0.45)
+    c.drawString(30, 20, f'Signé via ClawShow eSign | Doc: {doc_id} | {ts}'[:120])
+    c.drawString(30, 10, f'Vérification: {mcp_base}/esign/{doc_id}/verify')
+
+    c.save()
+    packet.seek(0)
+    return PdfReader(packet)
 
 
 def _overlay_signatures_pdf(

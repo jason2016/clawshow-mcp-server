@@ -111,12 +111,7 @@ async function doSignup(){
     });
     const d=await r.json();
     if(r.ok){
-      // send login OTP immediately
-      await fetch('/esign/auth/login/otp/send',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({email})
-      });
-      window.location.href='/login/verify?email='+encodeURIComponent(email)+'&new=1';
+      window.location.href=d.redirect_url||'/login/verify?email='+encodeURIComponent(email)+'&new=1';
     } else {
       err.textContent=d.error||'Erreur inattendue';err.style.display='block';
     }
@@ -313,7 +308,7 @@ async function loadDocs(){{
   if(!r.ok){{document.getElementById('docs').innerHTML='<p style="color:#475569">Aucune signature.</p>';return;}}
   const d=await r.json();
   if(!d.documents||!d.documents.length){{
-    document.getElementById('docs').innerHTML='<p style="color:#475569">Aucune signature pour l\'instant.</p>';
+    document.getElementById('docs').innerHTML='<p style="color:#475569">Aucune signature pour l&apos;instant.</p>';
     return;
   }}
   const statLabel={{pending:'En attente',completed:'Signé',declined:'Refusé'}};
