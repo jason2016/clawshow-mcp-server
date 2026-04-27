@@ -18,3 +18,11 @@ server.py.bak
 .mcpregistry_registry_token
 server.py.bak
 _archive/
+
+# Production data files
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/esign/
+*.db
+docs/PAYMENT-SYSTEM-STATUS.md
