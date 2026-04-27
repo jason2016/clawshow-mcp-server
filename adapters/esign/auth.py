@@ -5,7 +5,10 @@ Cookie: clawshow_esign_session (httpOnly, Secure, SameSite=Lax, 30 days)
 """
 import logging
 import secrets
+import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 
 import db
 from adapters.esign.mailer import send_html
@@ -15,6 +18,28 @@ from starlette.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "clawshow_esign_session"
+
+# ── Rate limiting (in-memory, per-process) ────────────────────────────────────
+_otp_send_history: dict = defaultdict(list)   # email -> [timestamps]
+_ip_signup_history: dict = defaultdict(list)  # ip    -> [timestamps]
+_rate_limit_lock = Lock()
+
+
+def _check_rate_limit(email: str, ip: str) -> tuple[bool, str]:
+    """60s cooldown per email; max 10 OTP requests/hour per IP."""
+    now = time.time()
+    with _rate_limit_lock:
+        _otp_send_history[email] = [t for t in _otp_send_history[email] if now - t < 3600]
+        _ip_signup_history[ip]   = [t for t in _ip_signup_history[ip]   if now - t < 3600]
+        if _otp_send_history[email] and now - _otp_send_history[email][-1] < 60:
+            return False, "Veuillez patienter avant de demander un nouveau code."
+        if len(_ip_signup_history[ip]) >= 10:
+            return False, "Trop de demandes. Veuillez réessayer plus tard."
+        _otp_send_history[email].append(now)
+        _ip_signup_history[ip].append(now)
+        return True, ""
+
+
 OTP_TTL_MIN = 10
 SESSION_TTL_DAYS = 30
 
@@ -111,6 +136,14 @@ async def auth_signup(request: Request) -> JSONResponse:
     if not email or "@" not in email:
         return JSONResponse({"error": "Valid email required"}, status_code=400)
 
+    xff = request.headers.get("x-forwarded-for", "")
+    client_ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "127.0.0.1")
+
+    allowed, reason = _check_rate_limit(email, client_ip)
+    if not allowed:
+        logger.warning("[SIGNUP] rate_limit email=%s ip=%s", email[:4] + "***", client_ip)
+        return JSONResponse({"error": reason}, status_code=429)
+
     display_name = (body.get("display_name") or email.split("@")[0]).strip()
 
     with db.get_conn() as conn:
@@ -141,59 +174,29 @@ async def auth_signup(request: Request) -> JSONResponse:
             (email, code, expires),
         )
 
-    name = display_name or email.split("@")[0]
-    if action == "created":
-        subject = f"Bienvenue ! Votre code : {code}"
-        html = (
-            "<body style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;"
-            "padding:24px;background:#f9f9fb'>"
-            "<div style='background:#fff;border-radius:10px;padding:32px 40px;"
-            "box-shadow:0 2px 8px rgba(0,0,0,.06)'>"
-            "<div style='text-align:center;margin-bottom:24px'>"
-            "<span style='font-size:28px;font-weight:700;color:#0F62FE'>X</span>"
-            "<span style='font-size:18px;font-weight:600;color:#0f172a;margin-left:4px'>"
-            "ClawShow eSign</span></div>"
-            f"<h2 style='color:#0f172a;font-size:20px;margin:0 0 8px'>Bienvenue {name}&nbsp;!</h2>"
-            "<p style='color:#475569;margin:0 0 8px'>Votre compte a &eacute;t&eacute; cr&eacute;&eacute; avec succ&egrave;s.</p>"
-            "<p style='color:#475569;margin:0 0 28px'>Vous disposez de <strong>3 signatures AES gratuites</strong>.</p>"
-            "<p style='color:#475569;margin:0 0 12px'>Votre code de connexion&nbsp;:</p>"
-            "<div style='text-align:center;margin:0 0 28px'>"
-            "<span style='display:inline-block;font-size:40px;font-weight:700;letter-spacing:10px;"
-            f"color:#0F62FE;background:#EFF6FF;padding:16px 32px;border-radius:8px'>{code}</span>"
-            "</div>"
-            "<p style='color:#64748b;font-size:13px;text-align:center'>"
-            "Ce code expire dans <strong>10 minutes</strong>.<br>"
-            "Si vous n&rsquo;avez pas demand&eacute; cette connexion, ignorez cet e-mail.</p>"
-            "<hr style='border:none;border-top:1px solid #e2e8f0;margin:24px 0'>"
-            "<p style='color:#94a3b8;font-size:11px;text-align:center'>"
-            "ClawShow SAS &mdash; 50 avenue des Champs-&Eacute;lys&eacute;es, 75008 Paris</p>"
-            "</div></body>"
-        )
-    else:
-        subject = f"Code de connexion ClawShow : {code}"
-        html = (
-            "<body style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;"
-            "padding:24px;background:#f9f9fb'>"
-            "<div style='background:#fff;border-radius:10px;padding:32px 40px;"
-            "box-shadow:0 2px 8px rgba(0,0,0,.06)'>"
-            "<div style='text-align:center;margin-bottom:24px'>"
-            "<span style='font-size:28px;font-weight:700;color:#0F62FE'>X</span>"
-            "<span style='font-size:18px;font-weight:600;color:#0f172a;margin-left:4px'>"
-            "ClawShow eSign</span></div>"
-            f"<h2 style='color:#0f172a;font-size:20px;margin:0 0 8px'>Bonjour {name}&nbsp;!</h2>"
-            "<p style='color:#475569;margin:0 0 28px'>Votre code de connexion ClawShow eSign&nbsp;:</p>"
-            "<div style='text-align:center;margin:0 0 28px'>"
-            "<span style='display:inline-block;font-size:40px;font-weight:700;letter-spacing:10px;"
-            f"color:#0F62FE;background:#EFF6FF;padding:16px 32px;border-radius:8px'>{code}</span>"
-            "</div>"
-            "<p style='color:#64748b;font-size:13px;text-align:center'>"
-            "Ce code expire dans <strong>10 minutes</strong>.<br>"
-            "Si vous n&rsquo;avez pas demand&eacute; cette connexion, ignorez cet e-mail.</p>"
-            "<hr style='border:none;border-top:1px solid #e2e8f0;margin:24px 0'>"
-            "<p style='color:#94a3b8;font-size:11px;text-align:center'>"
-            "ClawShow SAS &mdash; 50 avenue des Champs-&Eacute;lys&eacute;es, 75008 Paris</p>"
-            "</div></body>"
-        )
+    subject = "Votre code ClawShow eSign"
+    html = (
+        "<body style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;"
+        "padding:24px;background:#f9f9fb'>"
+        "<div style='background:#fff;border-radius:10px;padding:32px 40px;"
+        "box-shadow:0 2px 8px rgba(0,0,0,.06)'>"
+        "<div style='text-align:center;margin-bottom:24px'>"
+        "<span style='font-size:28px;font-weight:700;color:#0F62FE'>X</span>"
+        "<span style='font-size:18px;font-weight:600;color:#0f172a;margin-left:4px'>"
+        "ClawShow eSign</span></div>"
+        "<p style='color:#475569;margin:0 0 12px'>Votre code de connexion&nbsp;:</p>"
+        "<div style='text-align:center;margin:0 0 28px'>"
+        "<span style='display:inline-block;font-size:40px;font-weight:700;letter-spacing:10px;"
+        f"color:#0F62FE;background:#EFF6FF;padding:16px 32px;border-radius:8px'>{code}</span>"
+        "</div>"
+        "<p style='color:#64748b;font-size:13px;text-align:center'>"
+        "Ce code expire dans <strong>10 minutes</strong>.<br>"
+        "Si vous n&rsquo;avez pas demand&eacute; cette connexion, ignorez cet e-mail.</p>"
+        "<hr style='border:none;border-top:1px solid #e2e8f0;margin:24px 0'>"
+        "<p style='color:#94a3b8;font-size:11px;text-align:center'>"
+        "ClawShow SAS &mdash; 50 avenue des Champs-&Eacute;lys&eacute;es, 75008 Paris</p>"
+        "</div></body>"
+    )
 
     try:
         send_html(to=email, subject=subject, html=html)
@@ -201,10 +204,10 @@ async def auth_signup(request: Request) -> JSONResponse:
         logger.error("Signup OTP email failed: %s", exc)
         return JSONResponse({"error": "Echec envoi email"}, status_code=500)
 
-    logger.info("signup: %s user %s***", action, email[:4])
+    logger.info("[SIGNUP] action=%s email=%s*** ip=%s", action, email[:4], client_ip)
     import urllib.parse as _up
-    redirect_url = "/login/verify?email=" + _up.quote(email) + "&new=1"
-    return JSONResponse({"status": action, "email": email, "redirect_url": redirect_url})
+    redirect_url = "/login/verify?email=" + _up.quote(email)
+    return JSONResponse({"status": "ok", "email": email, "redirect_url": redirect_url})
 
 
 # ── POST /esign/auth/login/otp/send ──────────────────────────────────────────
