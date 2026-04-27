@@ -3263,7 +3263,7 @@ def _de_get_customer_from_request(request: Request) -> dict | None:
 
 def _de_send_otp_email(email: str, code: str) -> None:
     """Send OTP code via Gmail SMTP (runs in background thread)."""
-    if _os.environ.get("DEV_MODE") == "true":
+    if _os.environ.get("DEV_MODE", "false") == "true":
         logger.info(f"[DEV MODE] Dragons OTP for {email}: {code}")
         print(f"\n{'='*50}\n[DEV MODE] OTP for {email} -> {code}\n{'='*50}\n", flush=True)
         return
