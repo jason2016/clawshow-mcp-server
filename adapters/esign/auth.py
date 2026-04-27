@@ -118,20 +118,93 @@ async def auth_signup(request: Request) -> JSONResponse:
             "SELECT id FROM esign_users WHERE email = ?", (email,)
         ).fetchone()
 
-        if existing:
-            return JSONResponse(
-                {"status": "existing", "message": "Account already exists", "next_action": "login"},
-                status_code=200,
+        if not existing:
+            conn.execute(
+                "INSERT INTO esign_users (email, display_name, account_type, free_quota_total, free_quota_used) "
+                "VALUES (?, ?, 'personal', 3, 0)",
+                (email, display_name),
             )
+            action = "created"
+        else:
+            action = "existing"
 
+    # Auto-send OTP so user lands directly on verify page
+    code = _otp()
+    expires = (_now_utc() + timedelta(minutes=OTP_TTL_MIN)).strftime("%Y-%m-%dT%H:%M:%S")
+    with db.get_conn() as conn:
         conn.execute(
-            "INSERT INTO esign_users (email, display_name, account_type, free_quota_total, free_quota_used) "
-            "VALUES (?, ?, 'personal', 3, 0)",
-            (email, display_name),
+            "UPDATE esign_login_otps SET verified_at = ? WHERE email = ? AND verified_at IS NULL",
+            (_now_iso(), email),
+        )
+        conn.execute(
+            "INSERT INTO esign_login_otps (email, otp_code, expires_at) VALUES (?, ?, ?)",
+            (email, code, expires),
         )
 
-    logger.info("signup: new user %s***", email[:4])
-    return JSONResponse({"status": "created", "email": email, "free_quota": 3, "next_action": "login"})
+    name = display_name or email.split("@")[0]
+    if action == "created":
+        subject = f"Bienvenue ! Votre code : {code}"
+        html = (
+            "<body style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;"
+            "padding:24px;background:#f9f9fb'>"
+            "<div style='background:#fff;border-radius:10px;padding:32px 40px;"
+            "box-shadow:0 2px 8px rgba(0,0,0,.06)'>"
+            "<div style='text-align:center;margin-bottom:24px'>"
+            "<span style='font-size:28px;font-weight:700;color:#0F62FE'>X</span>"
+            "<span style='font-size:18px;font-weight:600;color:#0f172a;margin-left:4px'>"
+            "ClawShow eSign</span></div>"
+            f"<h2 style='color:#0f172a;font-size:20px;margin:0 0 8px'>Bienvenue {name}&nbsp;!</h2>"
+            "<p style='color:#475569;margin:0 0 8px'>Votre compte a &eacute;t&eacute; cr&eacute;&eacute; avec succ&egrave;s.</p>"
+            "<p style='color:#475569;margin:0 0 28px'>Vous disposez de <strong>3 signatures AES gratuites</strong>.</p>"
+            "<p style='color:#475569;margin:0 0 12px'>Votre code de connexion&nbsp;:</p>"
+            "<div style='text-align:center;margin:0 0 28px'>"
+            "<span style='display:inline-block;font-size:40px;font-weight:700;letter-spacing:10px;"
+            f"color:#0F62FE;background:#EFF6FF;padding:16px 32px;border-radius:8px'>{code}</span>"
+            "</div>"
+            "<p style='color:#64748b;font-size:13px;text-align:center'>"
+            "Ce code expire dans <strong>10 minutes</strong>.<br>"
+            "Si vous n&rsquo;avez pas demand&eacute; cette connexion, ignorez cet e-mail.</p>"
+            "<hr style='border:none;border-top:1px solid #e2e8f0;margin:24px 0'>"
+            "<p style='color:#94a3b8;font-size:11px;text-align:center'>"
+            "ClawShow SAS &mdash; 50 avenue des Champs-&Eacute;lys&eacute;es, 75008 Paris</p>"
+            "</div></body>"
+        )
+    else:
+        subject = f"Code de connexion ClawShow : {code}"
+        html = (
+            "<body style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;"
+            "padding:24px;background:#f9f9fb'>"
+            "<div style='background:#fff;border-radius:10px;padding:32px 40px;"
+            "box-shadow:0 2px 8px rgba(0,0,0,.06)'>"
+            "<div style='text-align:center;margin-bottom:24px'>"
+            "<span style='font-size:28px;font-weight:700;color:#0F62FE'>X</span>"
+            "<span style='font-size:18px;font-weight:600;color:#0f172a;margin-left:4px'>"
+            "ClawShow eSign</span></div>"
+            f"<h2 style='color:#0f172a;font-size:20px;margin:0 0 8px'>Bonjour {name}&nbsp;!</h2>"
+            "<p style='color:#475569;margin:0 0 28px'>Votre code de connexion ClawShow eSign&nbsp;:</p>"
+            "<div style='text-align:center;margin:0 0 28px'>"
+            "<span style='display:inline-block;font-size:40px;font-weight:700;letter-spacing:10px;"
+            f"color:#0F62FE;background:#EFF6FF;padding:16px 32px;border-radius:8px'>{code}</span>"
+            "</div>"
+            "<p style='color:#64748b;font-size:13px;text-align:center'>"
+            "Ce code expire dans <strong>10 minutes</strong>.<br>"
+            "Si vous n&rsquo;avez pas demand&eacute; cette connexion, ignorez cet e-mail.</p>"
+            "<hr style='border:none;border-top:1px solid #e2e8f0;margin:24px 0'>"
+            "<p style='color:#94a3b8;font-size:11px;text-align:center'>"
+            "ClawShow SAS &mdash; 50 avenue des Champs-&Eacute;lys&eacute;es, 75008 Paris</p>"
+            "</div></body>"
+        )
+
+    try:
+        send_html(to=email, subject=subject, html=html)
+    except Exception as exc:
+        logger.error("Signup OTP email failed: %s", exc)
+        return JSONResponse({"error": "Echec envoi email"}, status_code=500)
+
+    logger.info("signup: %s user %s***", action, email[:4])
+    import urllib.parse as _up
+    redirect_url = "/login/verify?email=" + _up.quote(email) + "&new=1"
+    return JSONResponse({"status": action, "email": email, "redirect_url": redirect_url})
 
 
 # ── POST /esign/auth/login/otp/send ──────────────────────────────────────────
