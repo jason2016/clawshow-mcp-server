@@ -20,6 +20,11 @@ class ResendMailError(Exception):
 
 def send_html(to: str, subject: str, html: str, from_address: str = FROM_ADDRESS) -> dict:
     """Send HTML email via Resend. Returns Resend response dict with 'id'."""
+    if os.getenv("DEV_MODE", "false") == "true":
+        logger.info("[DEV MODE] eSign email to=%s subject=%s (not sent)", to, subject)
+        print(f"\n{'='*50}\n[DEV MODE] eSign email to={to}\nsubject: {subject}\n{'='*50}\n", flush=True)
+        return {"id": "dev-mode"}
+
     api_key = os.getenv("RESEND_API_KEY")
     if not api_key:
         raise ResendMailError("RESEND_API_KEY not configured")
