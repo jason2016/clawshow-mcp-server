@@ -42,12 +42,14 @@ def init_tables() -> None:
     with get_conn() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS customers (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                email      TEXT UNIQUE NOT NULL,
-                name       TEXT,
-                phone      TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_login DATETIME
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                email            TEXT UNIQUE NOT NULL,
+                name             TEXT,
+                phone            TEXT,
+                referral_code    VARCHAR(8),
+                referred_by_code VARCHAR(8),
+                created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_login       DATETIME
             );
 
             CREATE TABLE IF NOT EXISTS balance_transactions (
@@ -98,11 +100,54 @@ def init_tables() -> None:
                 FOREIGN KEY (order_id) REFERENCES orders(id)
             );
 
+            CREATE TABLE IF NOT EXISTS referral_events (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_customer_id  INTEGER NOT NULL,
+                referred_customer_id  INTEGER NOT NULL,
+                order_ref             TEXT,
+                order_amount          REAL,
+                commission_amount     REAL NOT NULL,
+                event_type            TEXT NOT NULL,
+                status                TEXT DEFAULT 'credited',
+                metadata              TEXT,
+                created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (referrer_customer_id) REFERENCES customers(id),
+                FOREIGN KEY (referred_customer_id) REFERENCES customers(id),
+                UNIQUE(referred_customer_id, event_type)
+            );
+
+            CREATE TABLE IF NOT EXISTS google_reviews (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                google_reviewer_name  TEXT,
+                google_reviewer_email TEXT,
+                rating                INTEGER,
+                review_text           TEXT,
+                review_date           DATETIME,
+                matched_customer_id   INTEGER,
+                matched_at            DATETIME,
+                rewarded              INTEGER DEFAULT 0,
+                raw_email_content     TEXT,
+                created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (matched_customer_id) REFERENCES customers(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS fraud_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_phone  TEXT,
+                referred_phone  TEXT,
+                reason          TEXT,
+                created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_orders_status    ON orders(status);
             CREATE INDEX IF NOT EXISTS idx_orders_date      ON orders(created_at);
             CREATE INDEX IF NOT EXISTS idx_balance_customer ON balance_transactions(customer_id);
             CREATE INDEX IF NOT EXISTS idx_otp_email        ON otp_codes(email, used);
             CREATE INDEX IF NOT EXISTS idx_history_order    ON order_status_history(order_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_code ON customers(referral_code);
+            CREATE INDEX IF NOT EXISTS idx_referred_by      ON customers(referred_by_code);
+            CREATE INDEX IF NOT EXISTS idx_re_referrer      ON referral_events(referrer_customer_id);
+            CREATE INDEX IF NOT EXISTS idx_re_referred      ON referral_events(referred_customer_id);
         """)
 
 
@@ -130,7 +175,7 @@ def get_or_create_customer(email: str) -> dict:
 def get_customer_by_id(customer_id: int) -> dict | None:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT id, email, name, phone, created_at FROM customers WHERE id = ?",
+            "SELECT id, email, name, phone, referral_code, referred_by_code, created_at FROM customers WHERE id = ?",
             (customer_id,),
         ).fetchone()
     return dict(row) if row else None
@@ -471,3 +516,201 @@ def apply_cashback(order_id: int) -> None:
             "UPDATE orders SET cashback_earned = ?, updated_at = ? WHERE id = ?",
             (cashback, now, order_id),
         )
+
+
+# ── Referral & Google Review ────────────────────────────────────────────────
+
+def generate_unique_referral_code() -> str:
+    import random, string
+    chars = string.ascii_uppercase + string.digits
+    with get_conn() as conn:
+        while True:
+            code = "".join(random.choices(chars, k=8))
+            if not conn.execute(
+                "SELECT 1 FROM customers WHERE referral_code = ?", (code,)
+            ).fetchone():
+                return code
+
+
+def get_customer_by_referral_code(code: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, email, name, phone, referral_code, referred_by_code FROM customers WHERE referral_code = ?",
+            (code.upper(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_customer_by_phone(phone: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, email, name, phone, referral_code, referred_by_code FROM customers WHERE phone = ?",
+            (phone,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_customer_with_referral(data: dict) -> int:
+    """Insert new customer with referral fields, return new id."""
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO customers (email, name, phone, referral_code, referred_by_code, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                data.get("email", ""),
+                data.get("name", ""),
+                data.get("phone", ""),
+                data["referral_code"],
+                data.get("referred_by_code"),
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
+def has_triggered_referral_reward(referred_customer_id: int) -> bool:
+    """Return True if this customer already triggered a referral_first_order event."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM referral_events WHERE referred_customer_id = ? AND event_type = 'referral_first_order'",
+            (referred_customer_id,),
+        ).fetchone()
+    return row is not None
+
+
+def get_customer_last_order(customer_id: int) -> dict | None:
+    """Return most recent paid order for this customer."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, order_number, total_paid, status FROM orders WHERE customer_id = ? AND status = 'paid' ORDER BY id DESC LIMIT 1",
+            (customer_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def create_referral_event(data: dict) -> int:
+    """Insert referral event. Raises sqlite3.IntegrityError on UNIQUE duplicate."""
+    import json as _json
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO referral_events
+               (referrer_customer_id, referred_customer_id, order_ref, order_amount,
+                commission_amount, event_type, status, metadata, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                data["referrer_customer_id"],
+                data["referred_customer_id"],
+                data.get("order_ref"),
+                data.get("order_amount"),
+                data["commission_amount"],
+                data["event_type"],
+                data.get("status", "credited"),
+                _json.dumps(data["metadata"]) if data.get("metadata") else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return cur.lastrowid
+
+
+def get_referral_stats(customer_id: int) -> dict:
+    with get_conn() as conn:
+        code_row = conn.execute(
+            "SELECT referral_code FROM customers WHERE id = ?", (customer_id,)
+        ).fetchone()
+        if not code_row or not code_row["referral_code"]:
+            return {"total_referred": 0, "total_earned": 0.0, "pending_referrals": 0}
+        code = code_row["referral_code"]
+
+        total_referred = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM customers WHERE referred_by_code = ?", (code,)
+        ).fetchone()["cnt"]
+
+        earned_row = conn.execute(
+            """SELECT COALESCE(SUM(commission_amount), 0) AS s FROM referral_events
+               WHERE referrer_customer_id = ? AND event_type = 'referral_first_order' AND status = 'credited'""",
+            (customer_id,),
+        ).fetchone()
+        total_earned = float(earned_row["s"] or 0)
+
+        pending = conn.execute(
+            """SELECT COUNT(*) AS cnt FROM customers c
+               WHERE c.referred_by_code = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM referral_events e
+                   WHERE e.referred_customer_id = c.id AND e.event_type = 'referral_first_order'
+               )""",
+            (code,),
+        ).fetchone()["cnt"]
+
+    return {
+        "total_referred": total_referred,
+        "total_earned": round(total_earned, 2),
+        "pending_referrals": pending,
+    }
+
+
+def count_referrals_by_referrer_recent(referrer_customer_id: int, hours: int = 24) -> int:
+    """Count referral_first_order events created by this referrer in the last N hours."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) AS cnt FROM referral_events
+               WHERE referrer_customer_id = ? AND event_type = 'referral_first_order' AND created_at > ?""",
+            (referrer_customer_id, cutoff),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def log_fraud_attempt(referrer_phone: str, referred_phone: str, reason: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO fraud_log (referrer_phone, referred_phone, reason, created_at) VALUES (?, ?, ?, ?)",
+            (referrer_phone, referred_phone, reason, now),
+        )
+
+
+def insert_google_review(data: dict) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO google_reviews
+               (google_reviewer_name, google_reviewer_email, rating, review_text,
+                review_date, matched_customer_id, matched_at, raw_email_content, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                data.get("google_reviewer_name"),
+                data.get("google_reviewer_email"),
+                data.get("rating"),
+                data.get("review_text"),
+                data.get("review_date", now),
+                data.get("matched_customer_id"),
+                data.get("matched_at", now),
+                data.get("raw_email_content"),
+                now,
+            ),
+        )
+        return cur.lastrowid
+
+
+def mark_review_rewarded(review_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE google_reviews SET rewarded = 1 WHERE id = ?", (review_id,))
+
+
+def get_customers_with_orders_list(limit: int = 50) -> list[dict]:
+    """Return customers who have at least one order, with their last paid order amount."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT c.id, c.name, c.phone, c.email, c.referral_code,
+                      (SELECT o.total_paid FROM orders o
+                       WHERE o.customer_id = c.id AND o.status = 'paid'
+                       ORDER BY o.id DESC LIMIT 1) AS last_order_amount
+               FROM customers c
+               WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)
+               ORDER BY c.created_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]

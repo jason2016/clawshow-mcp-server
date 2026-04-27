@@ -3555,6 +3555,290 @@ async def de_payment_webhook(request: Request) -> JSONResponse:
     return JSONResponse({"received": True})
 
 
+# ── Referral & Loyalty endpoints ────────────────────────────────────────────
+
+_DE_REFERRAL_COMMISSION = 0.10
+_DE_REFERRAL_MIN_ORDER = 10.00
+_DE_REFERRAL_MAX_24H = 5
+
+
+async def de_get_referral_info(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/customer/{id}/referral"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        customer_id = int(request.path_params["id"])
+    except (KeyError, ValueError):
+        return JSONResponse({"error": "Invalid id"}, status_code=400)
+    customer = _de_db.get_customer_by_id(customer_id)
+    if not customer:
+        return JSONResponse({"error": "Customer not found"}, status_code=404)
+    if not customer.get("referral_code"):
+        return JSONResponse({"error": "Referral not enabled for this customer"}, status_code=409)
+    stats = _de_db.get_referral_stats(customer_id)
+    referral_url = f"https://jason2016.github.io/dragons-elysees/?ref={customer['referral_code']}"
+    import urllib.parse as _uparse
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={_uparse.quote(referral_url)}"
+    return JSONResponse({
+        "customer_id": customer_id,
+        "referral_code": customer["referral_code"],
+        "referral_url": referral_url,
+        "qr_code_url": qr_url,
+        "stats": stats,
+    })
+
+
+async def de_register_customer(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/customer/register"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    phone = (data.get("phone") or "").strip()
+    email = (data.get("email") or "").strip().lower()
+    name = (data.get("name") or "").strip()
+    ref_code = (data.get("referral_code") or "").strip().upper()
+    if not phone:
+        return JSONResponse({"error": "phone required"}, status_code=400)
+    if _de_db.get_customer_by_phone(phone):
+        return JSONResponse({"error": "Phone already registered"}, status_code=409)
+
+    referred_by_code = None
+    referrer_id = None
+    if ref_code:
+        referrer = _de_db.get_customer_by_referral_code(ref_code)
+        if referrer:
+            if referrer["phone"] == phone:
+                _de_db.log_fraud_attempt(referrer["phone"], phone, "self_referral")
+            elif _de_db.count_referrals_by_referrer_recent(referrer["id"]) >= _DE_REFERRAL_MAX_24H:
+                _de_db.log_fraud_attempt(referrer["phone"], phone, "rate_limit")
+            else:
+                referred_by_code = ref_code
+                referrer_id = referrer["id"]
+
+    new_code = _de_db.generate_unique_referral_code()
+    new_id = _de_db.create_customer_with_referral({
+        "phone": phone,
+        "email": email,
+        "name": name,
+        "referral_code": new_code,
+        "referred_by_code": referred_by_code,
+    })
+    return JSONResponse({
+        "success": True,
+        "customer_id": new_id,
+        "referral_code": new_code,
+        "referred_by": referrer_id,
+    }, status_code=201)
+
+
+async def de_order_complete_referral(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/order/complete — trigger referral reward if applicable"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    customer_id = data.get("customer_id")
+    order_ref = str(data.get("order_id") or "")
+    try:
+        order_amount = float(data.get("order_amount", 0))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "order_amount must be numeric"}, status_code=400)
+    if not customer_id:
+        return JSONResponse({"error": "customer_id required"}, status_code=400)
+
+    customer = _de_db.get_customer_by_id(int(customer_id))
+    if not customer:
+        return JSONResponse({"success": False, "reason": "customer_not_found"})
+    if not customer.get("referred_by_code"):
+        return JSONResponse({"success": True, "rewarded": False, "reason": "no_referrer"})
+    if _de_db.has_triggered_referral_reward(int(customer_id)):
+        return JSONResponse({"success": True, "rewarded": False, "reason": "already_rewarded"})
+    if order_amount < _DE_REFERRAL_MIN_ORDER:
+        return JSONResponse({"success": True, "rewarded": False, "reason": "below_min_order"})
+
+    referrer = _de_db.get_customer_by_referral_code(customer["referred_by_code"])
+    if not referrer:
+        return JSONResponse({"success": True, "rewarded": False, "reason": "referrer_not_found"})
+
+    commission = round(order_amount * _DE_REFERRAL_COMMISSION, 2)
+    try:
+        event_id = _de_db.create_referral_event({
+            "referrer_customer_id": referrer["id"],
+            "referred_customer_id": int(customer_id),
+            "order_ref": order_ref,
+            "order_amount": order_amount,
+            "commission_amount": commission,
+            "event_type": "referral_first_order",
+            "status": "credited",
+        })
+    except Exception:
+        return JSONResponse({"success": True, "rewarded": False, "reason": "duplicate_event"})
+
+    referred_name = customer.get("name") or customer.get("phone") or "client"
+    _de_db.add_balance_transaction(
+        referrer["id"],
+        "referral_reward",
+        commission,
+        f"Recommandation: {referred_name} (commande €{order_amount:.2f})",
+    )
+    return JSONResponse({
+        "success": True,
+        "rewarded": True,
+        "referrer_id": referrer["id"],
+        "commission_amount": commission,
+        "event_id": event_id,
+    })
+
+
+async def de_redeem_balance(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/order/redeem-balance"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    try:
+        customer_id = int(data["customer_id"])
+        order_ref = str(data.get("order_id") or "")
+        order_amount = float(data["order_amount"])
+        redeem_amount = float(data["redeem_amount"])
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse({"error": "customer_id, order_id, order_amount, redeem_amount required"}, status_code=400)
+
+    if redeem_amount <= 0:
+        return JSONResponse({"error": "redeem_amount must be positive"}, status_code=400)
+    if redeem_amount > order_amount:
+        return JSONResponse({"error": "redeem_amount exceeds order amount"}, status_code=400)
+
+    bal = _de_db.get_balance(customer_id)
+    if redeem_amount > bal["balance"]:
+        return JSONResponse({"error": "Insufficient balance", "available": bal["balance"]}, status_code=400)
+
+    _de_db.add_balance_transaction(
+        customer_id,
+        "payment",
+        -redeem_amount,
+        f"Utilisation solde - Commande {order_ref}",
+    )
+    new_balance = round(bal["balance"] - redeem_amount, 2)
+    return JSONResponse({
+        "success": True,
+        "redeemed": redeem_amount,
+        "new_balance": new_balance,
+        "order_amount_after": round(order_amount - redeem_amount, 2),
+    })
+
+
+async def de_customer_balance_history(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/customer/{id}/balance/history"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        customer_id = int(request.path_params["id"])
+    except (KeyError, ValueError):
+        return JSONResponse({"error": "Invalid id"}, status_code=400)
+    customer = _de_db.get_customer_by_id(customer_id)
+    if not customer:
+        return JSONResponse({"error": "Customer not found"}, status_code=404)
+    limit = int(request.query_params.get("limit", "20"))
+    bal = _de_db.get_balance(customer_id)
+    txns = _de_db.get_transactions(customer_id, limit=limit)
+    return JSONResponse({
+        "customer_id": customer_id,
+        "current_balance": bal["balance"],
+        "transactions": txns["transactions"],
+        "total": txns["total"],
+    })
+
+
+async def de_admin_simulate_review(request: Request) -> JSONResponse:
+    """POST /api/dragons-elysees/admin/simulate-google-review (demo mode only)"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    try:
+        customer_id = int(data["customer_id"])
+        rating = int(data.get("rating", 5))
+    except (KeyError, TypeError, ValueError):
+        return JSONResponse({"error": "customer_id required"}, status_code=400)
+    review_text = str(data.get("review_text") or "")
+
+    customer = _de_db.get_customer_by_id(customer_id)
+    if not customer:
+        return JSONResponse({"error": "Customer not found"}, status_code=404)
+    last_order = _de_db.get_customer_last_order(customer_id)
+    if not last_order:
+        return JSONResponse({"error": "Customer has no paid orders"}, status_code=400)
+
+    from datetime import timezone as _tz
+    now_iso = datetime.now(_tz.utc).isoformat()
+    review_id = _de_db.insert_google_review({
+        "google_reviewer_name": customer.get("name", ""),
+        "google_reviewer_email": customer.get("email", ""),
+        "rating": rating,
+        "review_text": review_text,
+        "review_date": now_iso,
+        "matched_customer_id": customer_id,
+        "matched_at": now_iso,
+        "raw_email_content": "[SIMULATED FOR DEMO - production mode uses IMAP after 5/19]",
+    })
+    reward_amount = _de_reward_for_review(customer_id, last_order, rating, review_text, review_id)
+    bal_after = _de_db.get_balance(customer_id)["balance"]
+    return JSONResponse({
+        "success": True,
+        "review_id": review_id,
+        "reward_amount": reward_amount,
+        "customer_balance_after": bal_after,
+        "message": "Demo: Google review reward triggered. Production mode (5/19+) will use IMAP listener.",
+    })
+
+
+def _de_reward_for_review(customer_id: int, last_order: dict, rating: int, review_text: str, review_id: int) -> float:
+    """Credit google review reward. Returns amount credited (0 if already rewarded)."""
+    reward_amount = round(float(last_order.get("total_paid", 0)) * _DE_REFERRAL_COMMISSION, 2)
+    if reward_amount <= 0:
+        return 0.0
+    try:
+        _de_db.create_referral_event({
+            "referrer_customer_id": customer_id,
+            "referred_customer_id": customer_id,
+            "order_ref": str(last_order.get("order_number", last_order.get("id", ""))),
+            "order_amount": float(last_order.get("total_paid", 0)),
+            "commission_amount": reward_amount,
+            "event_type": "google_review",
+            "status": "credited",
+            "metadata": {"google_review_id": review_id, "rating": rating, "review_text": review_text},
+        })
+    except Exception:
+        return 0.0  # UNIQUE constraint: already rewarded this customer
+    _de_db.add_balance_transaction(
+        customer_id,
+        "review_reward",
+        reward_amount,
+        f"Avis Google ({rating}★) - récompense fidélité",
+    )
+    _de_db.mark_review_rewarded(review_id)
+    return reward_amount
+
+
+async def de_admin_customers_with_orders(request: Request) -> JSONResponse:
+    """GET /api/dragons-elysees/admin/customers-with-orders"""
+    if _de_db is None:
+        return JSONResponse({"error": "Service unavailable"}, status_code=503)
+    customers = _de_db.get_customers_with_orders_list()
+    for c in customers:
+        c["balance"] = _de_db.get_balance(c["id"])["balance"]
+    return JSONResponse({"customers": customers, "total": len(customers)})
+
 # ---------------------------------------------------------------------------
 # Documentation page
 # ---------------------------------------------------------------------------
@@ -3846,6 +4130,14 @@ def _build_app() -> Starlette:
             Route("/api/dragons-elysees/stats", de_get_stats, methods=["GET"]),
             Route("/api/dragons-elysees/payment/create", de_payment_create, methods=["POST"]),
             Route("/api/dragons-elysees/payment/webhook", de_payment_webhook, methods=["POST"]),
+            # Dragons Elysées — referral & loyalty
+            Route("/api/dragons-elysees/customer/register", de_register_customer, methods=["POST"]),
+            Route("/api/dragons-elysees/customer/{id:int}/referral", de_get_referral_info, methods=["GET"]),
+            Route("/api/dragons-elysees/customer/{id:int}/balance/history", de_customer_balance_history, methods=["GET"]),
+            Route("/api/dragons-elysees/order/complete", de_order_complete_referral, methods=["POST"]),
+            Route("/api/dragons-elysees/order/redeem-balance", de_redeem_balance, methods=["POST"]),
+            Route("/api/dragons-elysees/admin/simulate-google-review", de_admin_simulate_review, methods=["POST"]),
+            Route("/api/dragons-elysees/admin/customers-with-orders", de_admin_customers_with_orders, methods=["GET"]),
             # Neige Rouge 红雪餐厅 — receipts & invoices
             Route("/api/neige-rouge/orders/{id:int}/receipt", api_nr_receipt, methods=["GET"]),
             Route("/api/neige-rouge/orders/{id:int}/invoice", api_nr_invoice_get, methods=["GET"]),

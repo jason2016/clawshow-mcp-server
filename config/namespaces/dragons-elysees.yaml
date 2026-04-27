@@ -14,3 +14,25 @@ notification:
   email_from: "hello@clawshow.ai"
   email_from_name: "Dragons Elysées"
   language: "fr"
+
+referral:
+  enabled: true
+  commission_rate: 0.10       # 10% of referred customer's first order
+  only_first_order: true      # Jason decision 2026-04-27: first order only
+  min_first_order: 10.00      # minimum order amount to trigger reward
+  max_referrals_per_24h: 5    # anti-fraud rate limit per referrer
+  blacklist_phones: []        # owner/staff phones to exclude from referral
+
+google_reviews:
+  enabled: true
+  mode: "demo"                # demo | production
+  commission_rate: 0.10       # 10% of customer's last paid order
+  demo:
+    description: "Admin manual trigger for demo. Replaced by IMAP listener after 5/19."
+  # production (enable after 5/19 — uncomment and set env vars):
+  # production:
+  #   imap:
+  #     server: "imap.ovh.fr"
+  #     email: "reviews@dragons-elysees.clawshow.ai"
+  #     password_env: "DRAGONS_GMB_PASSWORD"
+  #     poll_interval_minutes: 30
