@@ -154,19 +154,31 @@ def init_tables() -> None:
 # ── Customers ──────────────────────────────────────────────────────────────
 
 def get_or_create_customer(email: str) -> dict:
-    """Upsert customer by email, update last_login, return dict."""
+    """Upsert customer by email, update last_login, return dict.
+
+    For new customers, automatically generates a unique referral_code.
+    """
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO customers (email, created_at) VALUES (?, ?)",
-            (email, now),
-        )
+        existing = conn.execute(
+            "SELECT id FROM customers WHERE email = ?",
+            (email,),
+        ).fetchone()
+
+        if not existing:
+            referral_code = generate_unique_referral_code()
+            conn.execute(
+                "INSERT INTO customers (email, referral_code, created_at) VALUES (?, ?, ?)",
+                (email, referral_code, now),
+            )
+
         conn.execute(
             "UPDATE customers SET last_login = ? WHERE email = ?",
             (now, email),
         )
+
         row = conn.execute(
-            "SELECT id, email, name, phone, created_at FROM customers WHERE email = ?",
+            "SELECT id, email, name, phone, referral_code, created_at FROM customers WHERE email = ?",
             (email,),
         ).fetchone()
     return dict(row) if row else {}
