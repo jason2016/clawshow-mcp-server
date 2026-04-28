@@ -3321,6 +3321,7 @@ async def de_verify_otp(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     email = data.get("email", "").strip().lower()
     code = data.get("code", "").strip()
+    referral_code_input = data.get("referral_code")
     if not email or not code:
         return JSONResponse({"error": "email and code required"}, status_code=400)
     if not _de_db.verify_and_consume_otp(email, code):
@@ -3328,6 +3329,56 @@ async def de_verify_otp(request: Request) -> JSONResponse:
     customer = _de_db.get_or_create_customer(email)
     token = _de_create_token(customer["id"], email)
     bal = _de_db.get_balance(customer["id"])
+
+    # ──────────────────────────────────────────────────────
+    # Referral binding (idempotent, anti-abuse)
+    # 仅在以下条件全满足时绑定：
+    #   1. 前端传了 referral_code
+    #   2. 当前 customer 还没有 referred_by_code（首次机会）
+    #   3. referral_code 对应的推荐人存在
+    #   4. 推荐人不是自己（自荐拦截）
+    # ──────────────────────────────────────────────────────
+    referred_by_response = None
+    if referral_code_input:
+        ref_code_clean = referral_code_input.strip().upper()
+        try:
+            with _de_db.get_conn() as conn:
+                # 查当前 customer 是否已有 referred_by_code
+                row = conn.execute(
+                    "SELECT referred_by_code FROM customers WHERE id = ?",
+                    (customer["id"],),
+                ).fetchone()
+                already_bound = row and row["referred_by_code"]
+
+                if not already_bound:
+                    # 查推荐人
+                    referrer = _de_db.get_customer_by_referral_code(ref_code_clean)
+                    if referrer and referrer["id"] != customer["id"]:
+                        # 写入 referred_by_code
+                        conn.execute(
+                            "UPDATE customers SET referred_by_code = ? WHERE id = ? AND (referred_by_code IS NULL OR referred_by_code = '')",
+                            (ref_code_clean, customer["id"]),
+                        )
+                        referred_by_response = ref_code_clean
+                        logger.info(
+                            "[DRAGONS REFERRAL] customer_id=%s bound to referrer_code=%s",
+                            customer["id"], ref_code_clean
+                        )
+                    else:
+                        if referrer and referrer["id"] == customer["id"]:
+                            logger.warning(
+                                "[DRAGONS REFERRAL] self-referral blocked: customer_id=%s",
+                                customer["id"]
+                            )
+                        else:
+                            logger.warning(
+                                "[DRAGONS REFERRAL] invalid code: %s (customer_id=%s)",
+                                ref_code_clean, customer["id"]
+                            )
+        except Exception as e:
+            # Referral 失败不能影响登录 - 记录后继续
+            logger.error("[DRAGONS REFERRAL] binding error: %s", e, exc_info=True)
+
     return JSONResponse({
         "success": True,
         "token": token,
@@ -3337,6 +3388,7 @@ async def de_verify_otp(request: Request) -> JSONResponse:
             "name": customer.get("name"),
             "balance": bal["balance"],
         },
+        "referred_by": referred_by_response,
     })
 
 
