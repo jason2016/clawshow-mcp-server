@@ -3536,31 +3536,109 @@ async def de_get_transactions(request: Request) -> JSONResponse:
 # ── Payment endpoints ──
 
 async def de_payment_create(request: Request) -> JSONResponse:
-    """POST /api/dragons-elysees/payment/create"""
+    """POST /api/dragons-elysees/payment/create
+
+    Supports payment_method: stancer (default) | sumup
+    For sumup, also accepts payment_mode: online (default) | in_person_solo | in_person_caisse | cash
+    """
     if _de_db is None:
         return JSONResponse({"error": "Service unavailable"}, status_code=503)
     try:
         data = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
     order_id = data.get("order_id")
+    order_number = data.get("order_number")
     amount = data.get("amount", 0)
     return_url = data.get("return_url", "")
-    if not order_id or not amount:
-        return JSONResponse({"error": "order_id and amount required"}, status_code=400)
-    order = _de_db.get_order_by_id(int(order_id))
+    payment_method = (data.get("payment_method") or "stancer").strip().lower()
+    payment_mode = (data.get("payment_mode") or "online").strip().lower()
+
+    # resolve order — accept either order_id or order_number
+    if order_id:
+        order = _de_db.get_order_by_id(int(order_id))
+    elif order_number:
+        order = _de_db.get_order_by_number(str(order_number))
+    else:
+        return JSONResponse({"error": "order_id or order_number required"}, status_code=400)
+
+    if not amount:
+        return JSONResponse({"error": "amount required"}, status_code=400)
     if not order:
         return JSONResponse({"error": "Order not found"}, status_code=404)
-    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
-    if not stancer_key or stancer_key.startswith("stest_your"):
-        return JSONResponse({"error": "Stancer not configured"}, status_code=500)
-    auth = _b64.b64encode(f"{stancer_key}:".encode()).decode()
-    amount_cents = int(float(amount) * 100)
+
+    resolved_order_id = order["id"]
+
     if not return_url:
         return_url = (
             f"https://jason2016.github.io/dragons-elysees/"
             f"#/payment-success?order={order['order_number']}"
         )
+
+    # ── SumUp path ────────────────────────────────────────────────────────────
+    if payment_method == "sumup":
+        import logging as _log_de_pay
+        _de_pay_log = _log_de_pay.getLogger("de_payment_create")
+        try:
+            from tools.payment import _create_sumup_by_mode
+            amount_cents = int(round(float(amount) * 100))
+            result = _create_sumup_by_mode(
+                namespace="dragons-elysees",
+                amount=amount_cents,
+                currency="EUR",
+                description=f"Dragons Elysées - {order['order_number']}",
+                payment_mode=payment_mode,
+                device_id=data.get("device_id") or None,
+                return_url=return_url,
+                external_reference=str(resolved_order_id),
+                items=data.get("items"),
+            )
+        except Exception as exc:
+            _de_pay_log.error(f"[DRAGONS SUMUP] _create_sumup_by_mode error: {exc}", exc_info=True)
+            return JSONResponse({"error": "payment_unavailable", "detail": str(exc)}, status_code=502)
+
+        if not result.get("success"):
+            return JSONResponse({"error": result.get("error", "SumUp error")}, status_code=502)
+
+        checkout_id = result.get("payment_id", "")
+        payment_url = result.get("payment_url", "")
+
+        # mock online: append query params so /mock-checkout page can show amount + trigger success
+        if result.get("is_mock") and payment_mode == "online" and payment_url:
+            from urllib.parse import urlencode as _urlencode
+            _qp = {
+                "namespace": "dragons-elysees",
+                "order_id": str(resolved_order_id),
+                "amount": f"{float(amount):.2f}",
+                "currency": "EUR",
+                "return_url": return_url,
+            }
+            payment_url = payment_url + "?" + _urlencode(_qp)
+
+        _de_db.update_order_payment(resolved_order_id, checkout_id, "sumup")
+        _de_pay_log.info(
+            f"[DRAGONS SUMUP] order_id={resolved_order_id} mode={payment_mode} "
+            f"checkout_id={checkout_id} is_mock={result.get('is_mock')}"
+        )
+        return JSONResponse({
+            "payment_url": payment_url,
+            "payment_id": checkout_id,
+            "provider": "sumup",
+            "mode": payment_mode,
+            "status": result.get("status", "pending"),
+            "is_mock": result.get("is_mock", False),
+        })
+
+    # ── Stancer path (default, preserved) ─────────────────────────────────────
+    if payment_method != "stancer":
+        return JSONResponse({"error": f"Unknown payment_method: {payment_method}"}, status_code=400)
+
+    stancer_key = _os.environ.get("STANCER_SECRET_KEY", "")
+    if not stancer_key or stancer_key.startswith("stest_your"):
+        return JSONResponse({"error": "Stancer not configured"}, status_code=500)
+    auth = _b64.b64encode(f"{stancer_key}:".encode()).decode()
+    amount_cents = int(float(amount) * 100)
     try:
         resp = _req_lib.post(
             "https://api.stancer.com/v2/payment_intents/",
@@ -3585,7 +3663,7 @@ async def de_payment_create(request: Request) -> JSONResponse:
     payment_url = result.get("url", "")
     if not payment_url:
         return JSONResponse({"error": "payment_unavailable", "fallback": True, "detail": "No payment URL from Stancer"}, status_code=502)
-    _de_db.update_order_payment(int(order_id), payment_id, "stancer")
+    _de_db.update_order_payment(resolved_order_id, payment_id, "stancer")
     return JSONResponse({"payment_url": payment_url, "payment_id": payment_id})
 
 
