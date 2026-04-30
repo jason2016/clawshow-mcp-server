@@ -380,12 +380,31 @@ async def mock_payment_success(request: Request) -> JSONResponse:
 
     import logging as _log_mod
     _mock_log = _log_mod.getLogger("mock_payment_success")
+    _caller_ip = request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for") or "unknown"
 
+    # dragons-elysees uses its own DB (orders table), not the generic dine_orders table
+    if namespace == "dragons-elysees":
+        if _de_db is None:
+            return JSONResponse({"error": "Dragons DB unavailable"}, status_code=503)
+        order = _de_db.get_order_by_id(order_id)
+        if not order:
+            return JSONResponse({"error": "Order not found"}, status_code=404)
+        _de_db.update_order_status(order_id, "paid")
+        _de_db.apply_cashback(order_id)
+        _mock_log.info(f"[MOCK] Payment success triggered: {namespace}/order {order_id} caller_ip={_caller_ip}")
+        return JSONResponse({
+            "success": True,
+            "order_id": order_id,
+            "namespace": namespace,
+            "payment_status": "paid",
+            "mock": True,
+        })
+
+    # all other namespaces use the generic dine_orders table
     result = db.update_dine_order_payment_status(namespace, order_id, "paid")
     if not result.get("success"):
         return JSONResponse({"error": result.get("error", "Order not found")}, status_code=404)
 
-    _caller_ip = request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for") or "unknown"
     _mock_log.info(f"[MOCK] Payment success triggered: {namespace}/order {order_id} caller_ip={_caller_ip}")
     return JSONResponse({
         "success": True,
