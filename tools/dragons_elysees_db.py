@@ -77,6 +77,13 @@ def init_tables() -> None:
                 status         TEXT DEFAULT 'pending',
                 table_number   TEXT,
                 note           TEXT,
+                order_type            TEXT DEFAULT 'dine_in',
+                delivery_address      TEXT DEFAULT '',
+                delivery_phone        TEXT DEFAULT '',
+                delivery_instructions TEXT DEFAULT '',
+                delivery_fee          REAL DEFAULT 0,
+                guest_name            TEXT DEFAULT '',
+                guest_phone           TEXT DEFAULT '',
                 created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (customer_id) REFERENCES customers(id)
